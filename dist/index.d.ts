@@ -157,6 +157,7 @@ export type AdditionalHostPropertyInfo = {
 };
 export type HostChangeObjectMessage<T extends object = object> = ChangeObjectMessage<T, AdditionalHostPropertyInfo>;
 export type HostMessage<T extends object = object> = Message<T, AdditionalHostPropertyInfo>;
+export type TResult<T, K extends keyof T> = T[K] extends (...args: any[]) => any ? ReturnType<T[K]> : never;
 export type ClientFilter = {
 	/**
 	 * Set of clients to include or exclude
@@ -197,10 +198,7 @@ export type ServerObjectSyncMetaInfoCreateSettings<T extends object> = ObjectSyn
 };
 export type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
 export type MethodCallResultByClient<T> = Map<ClientConnection, Promise<UnwrapPromise<T>>>;
-export type MethodCallResult<T> = {
-	resultsByClient: Promise<MethodCallResultByClient<T>>;
-	hostResult: T;
-};
+export type MethodCallResult<T> = Promise<MethodCallResultByClient<T>>;
 /**
  * TrackableObject wraps an object for change tracking and client synchronization on the host side.
  * It manages property changes, client-specific views, and message generation for create, change, delete, and execute operations.
@@ -230,6 +228,7 @@ export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
 	private _views;
 	/** Holds the set of clients which know about this. */
 	private _clients;
+	private _lastMethodCallResult;
 	/**
 	 * Constructs a TrackableObject with a typeId and optional objectId.
 	 */
@@ -275,7 +274,12 @@ export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
 	/**
 	 * Records a method execution for this object, converting arguments to trackable references if needed.
 	 */
-	onMethodExecute(method: keyof T, args: any[], hostResult: any): MethodCallResult<any>;
+	onMethodExecute(method: keyof T, args: any[]): Promise<Map<ClientConnectionSettings, Promise<T>>>;
+	getInvokeResults<K extends keyof T = any>(method?: K): MethodCallResult<TResult<T, K>> | null;
+	invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): {
+		clientResults: MethodCallResult<TResult<T, K>>;
+		hostResult: TResult<T, K>;
+	};
 	private onClientMethodExecuteSendToClient;
 	onClientMethodExecuteResultReceived(methodExecuteResult: MethodExecuteResult, client: ClientConnection): void;
 	/**
@@ -477,7 +481,8 @@ export declare class ObjectSync {
 	get host(): ObjectSyncHost;
 	get client(): ObjectSyncClient;
 	getMessages(): Map<ClientConnection, Message[]>;
-	applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<void>;
+	applyClientMethodInvokeResults(resultsByClient: Map<ClientConnection, MethodExecuteResult[]>): void;
+	applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<Map<ClientConnection, MethodExecuteResult[]>>;
 }
 type Constructor$1<T = any> = {
 	new (...args: any[]): T;
@@ -487,7 +492,6 @@ export type TrackedPropertySettings = {
 };
 export type TrackedMethodSettings = TrackedPropertySettings & {
 	clientMethod?: string;
-	returnResultsByClient?: boolean;
 };
 export type TrackableConstructorInfo = {
 	trackedProperties: Map<string, TrackedPropertySettings>;

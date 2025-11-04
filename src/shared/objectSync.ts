@@ -1,6 +1,6 @@
 import { ClientConnection, ObjectSyncHost } from "../host/host.js";
 import { ObjectSyncClient } from "../client/client.js";
-import { Message } from "./messages.js";
+import { Message, MethodExecuteResult } from "./messages.js";
 import { TrackedObjectPool } from "./trackedObjectPool.js";
 
 export type ObjectSyncSettings = {
@@ -36,17 +36,24 @@ export class ObjectSync {
     return this._host.getMessages();
   }
 
-  async applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<void> {
+  applyClientMethodInvokeResults(resultsByClient: Map<ClientConnection, MethodExecuteResult[]>): void {
+    for (const [clientToken, results] of resultsByClient) {
+      this._host.applyClientMethodInvokeResults(clientToken, results);
+    }
+  }
+
+  async applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<Map<ClientConnection, MethodExecuteResult[]>> {
+    const resultsByClient = new Map<ClientConnection, MethodExecuteResult[]>();
     for (const [clientToken, messages] of messagesByClient) {
       const results = await this._client.applyAsync(messages);
+      resultsByClient.set(clientToken, results.methodExecuteResults);
       for (const obj of results.newTrackedObjects) {
         this._host.track(obj, {
           ignoreAlreadyTracked: true,
           knownClients: clientToken,
         });
       }
-
-      this.host.applyClientMethodInvokeResults(clientToken, results.methodExecuteResults);
     }
+    return resultsByClient;
   }
 }

@@ -23,6 +23,8 @@ export type AdditionalHostPropertyInfo = {
 export type HostChangeObjectMessage<T extends object = object> = ChangeObjectMessage<T, AdditionalHostPropertyInfo>;
 export type HostMessage<T extends object = object> = Message<T, AdditionalHostPropertyInfo>;
 
+type TResult<T, K extends keyof T> = T[K] extends (...args: any[]) => any ? ReturnType<T[K]> : never;
+
 let nextInvokeId = 0;
 
 export type ClientFilter = {
@@ -87,10 +89,7 @@ export type ServerObjectSyncMetaInfoCreateSettings<T extends object> = ObjectSyn
 type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
 export type MethodCallResultByClient<T> = Map<ClientConnection, Promise<UnwrapPromise<T>>>;
 
-export type MethodCallResult<T> = {
-  resultsByClient: Promise<MethodCallResultByClient<T>>;
-  hostResult: T;
-};
+export type MethodCallResult<T> = Promise<MethodCallResultByClient<T>>;
 
 type PendingMethodCall = {
   id: unknown;
@@ -155,6 +154,8 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   private _views: ClientSpecificView<T>[] = [];
   /** Holds the set of clients which know about this. */
   private _clients: Set<ClientConnection> = new Set();
+
+  private _lastMethodCallResult: MethodCallResult<any> | null = null;
 
   /**
    * Constructs a TrackableObject with a typeId and optional objectId.
@@ -271,8 +272,9 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   /**
    * Records a method execution for this object, converting arguments to trackable references if needed.
    */
-  onMethodExecute(method: keyof T, args: any[], hostResult: any) {
+  onMethodExecute(method: keyof T, args: any[]) {
     const parameters: PropertyInfos<any, any>[] = [];
+
     args.forEach((arg, index) => {
       const trackable = this.convertToTrackableObjectReference(arg);
       const paramInfo: PropertyInfo<any, any> = {
@@ -294,14 +296,9 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
     this._methodInvokeCalls.push(message);
 
     let onRemainingClientsResolved: (result: Map<ClientConnection, Promise<T>>) => void;
-    const resultsByClient = new Promise<Map<ClientConnection, Promise<T>>>((resolve) => {
+    const result = new Promise<Map<ClientConnection, Promise<T>>>((resolve) => {
       onRemainingClientsResolved = resolve;
     });
-
-    const result: MethodCallResult<any> = {
-      hostResult,
-      resultsByClient,
-    };
 
     this._pendingMethodInvokeCalls.set(message.id, {
       id: message.id,
@@ -311,7 +308,21 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
       onRemainingClientsResolved: onRemainingClientsResolved!,
     });
 
+    this._lastMethodCallResult = result;
+
     return result;
+  }
+
+  getInvokeResults<K extends keyof T = any>(method?: K): MethodCallResult<TResult<T, K>> | null {
+    const result = this._lastMethodCallResult;
+    this._lastMethodCallResult = null;
+    return result as MethodCallResult<TResult<T, K>> | null;
+  }
+
+  invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): { clientResults: MethodCallResult<TResult<T, K>>, hostResult: TResult<T, K> } {
+    const hostResult = (this.object as any)[method](...args) as TResult<T, K>;
+    const clientResults = this.getInvokeResults<K>(method)!;
+    return { clientResults, hostResult };
   }
 
   private onClientMethodExecuteSendToClient(client: ClientConnection, invokeId: unknown) {

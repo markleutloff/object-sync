@@ -17,10 +17,6 @@ type TrackedMethodSettings = TrackedPropertySettings & {
    * When not provided the same method name will be used.
    */
   clientMethod?: string;
-  /*
-   * Whether the method should return results from clients. When set to true the methods return type will be of AsyncMethodCallPromiseByClient<T>.
-   */
-  returnResultsByClient?: boolean;
 };
 
 type TrackableConstructorInfo = {
@@ -83,9 +79,7 @@ export function syncMethod<This, Return>(settings?: TrackedMethodSettings) {
       const result = originalMethod.apply(this, args);
 
       const host = getObjectSyncMetaInfo(this)?.host;
-      const methodExecuteResult = host?.onMethodExecute(settings.clientMethod ?? (context.name as any), args, result);
-
-      if (settings.returnResultsByClient && methodExecuteResult) return methodExecuteResult;
+      host?.onMethodExecute(settings.clientMethod ?? (context.name as any), args);
 
       return result;
     };

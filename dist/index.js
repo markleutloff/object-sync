@@ -476,9 +476,7 @@ function syncMethod(settings) {
     return function(...args) {
       const result = originalMethod.apply(this, args);
       const host = getObjectSyncMetaInfo(this)?.host;
-      const methodExecuteResult = host?.onMethodExecute(settings.clientMethod ?? context.name, args, result);
-      if (settings.returnResultsByClient && methodExecuteResult)
-        return methodExecuteResult;
+      host?.onMethodExecute(settings.clientMethod ?? context.name, args);
       return result;
     };
   };
@@ -849,6 +847,7 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
     __publicField(this, "_views", []);
     /** Holds the set of clients which know about this. */
     __publicField(this, "_clients", /* @__PURE__ */ new Set());
+    __publicField(this, "_lastMethodCallResult", null);
     this._host = _host;
     this._isRootObject = _isRootObject;
     this._objectIdPrefix = _objectIdPrefix;
@@ -981,7 +980,7 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
   /**
    * Records a method execution for this object, converting arguments to trackable references if needed.
    */
-  onMethodExecute(method, args, hostResult) {
+  onMethodExecute(method, args) {
     const parameters = [];
     args.forEach((arg, index) => {
       const trackable = this.convertToTrackableObjectReference(arg);
@@ -1001,13 +1000,9 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
     };
     this._methodInvokeCalls.push(message);
     let onRemainingClientsResolved;
-    const resultsByClient = new Promise((resolve) => {
+    const result = new Promise((resolve) => {
       onRemainingClientsResolved = resolve;
     });
-    const result = {
-      hostResult,
-      resultsByClient
-    };
     this._pendingMethodInvokeCalls.set(message.id, {
       id: message.id,
       resultByClient: /* @__PURE__ */ new Map(),
@@ -1015,7 +1010,18 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
       result,
       onRemainingClientsResolved
     });
+    this._lastMethodCallResult = result;
     return result;
+  }
+  getInvokeResults(method) {
+    const result = this._lastMethodCallResult;
+    this._lastMethodCallResult = null;
+    return result;
+  }
+  invoke(method, ...args) {
+    const hostResult = this.object[method](...args);
+    const clientResults = this.getInvokeResults(method);
+    return { clientResults, hostResult };
   }
   onClientMethodExecuteSendToClient(client, invokeId) {
     const pendingCall = this._pendingMethodInvokeCalls.get(invokeId);
@@ -1524,17 +1530,24 @@ var ObjectSync = class {
   getMessages() {
     return this._host.getMessages();
   }
+  applyClientMethodInvokeResults(resultsByClient) {
+    for (const [clientToken, results] of resultsByClient) {
+      this._host.applyClientMethodInvokeResults(clientToken, results);
+    }
+  }
   async applyMessagesAsync(messagesByClient) {
+    const resultsByClient = /* @__PURE__ */ new Map();
     for (const [clientToken, messages] of messagesByClient) {
       const results = await this._client.applyAsync(messages);
+      resultsByClient.set(clientToken, results.methodExecuteResults);
       for (const obj of results.newTrackedObjects) {
         this._host.track(obj, {
           ignoreAlreadyTracked: true,
           knownClients: clientToken
         });
       }
-      this.host.applyClientMethodInvokeResults(clientToken, results.methodExecuteResults);
     }
+    return resultsByClient;
   }
 };
 

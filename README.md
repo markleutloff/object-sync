@@ -59,9 +59,12 @@ hostSync.host.track(beta);
 ```typescript
 async function exchangeMessagesAsync() {
   const h2cMessages = hostSync.getMessages();
-  clientSync.applyMessagesAsync(h2cMessages);
+  const methodInvokeResults0 = await clientSync.applyMessagesAsync(h2cMessages);
+  hostSync.applyClientMethodInvokeResults(methodInvokeResults0);
+
   const c2hMessages = clientSync.getMessages();
-  hostSync.applyMessagesAsync(c2hMessages);
+  const methodInvokeResults1 = await hostSync.applyMessagesAsync(c2hMessages);
+  clientSync.applyClientMethodInvokeResults(methodInvokeResults1);
 }
 
 beta.value = 1;
@@ -93,27 +96,25 @@ import { syncObject, syncMethod, MethodCallResult } from "simple-object-sync";
 
 @syncObject({ typeId: "Beta" })
 class Beta {
-  @syncMethod({
-    returnResultsByClient: true,
-    clientMethod: "callFunction", // When omitted will simply call callFunctionOnClients on all clients
-  })
-  callFunctionOnClients(value: number): number | MethodCallResult<number> {
-    return 123;
-  }
-
   @syncMethod()
-  callFunction(value: number) {
-    return value;
+  callFunctionOnClients(value: number): number {
+     return value;
   }
 }
 
 const beta = new Beta();
 ...
-const callResults = beta.callFunctionOnClients(42) as unknown as MethodCallResult<number>;
-console.log(`The hosts method returned: ${callResults.hostResult}`)
+const hostResult = beta.callFunctionOnClients(42);
+const clientResults = getHostObjectInfo(beta)!.getInvokeResults("callFunctionOnClients")!;
+// You can leave the method name to get the untyped result of the last invoke call:
+//    const methodCallResult = getHostObjectInfo(beta)!.getInvokeResults()!;
+// This can also be combined into a single call, which supports full type support for the arguments:
+//    const { clientResults, hostResult } = getHostObjectInfo(hBeta)!.invoke("invoke", 4);
 
-// resultsByClient is a promise because we do not know the clients yet 
-callResults.resultsByClient.then(async (clientAndResult) => {
+console.log(`The hosts method returned: ${hostResult}`)
+
+// clientResults is a promise because we do not know the clients until we send the messages to them
+clientResults.then(async (clientAndResult) => {
    for (const [client, promise] of clientAndResult) {
       // Individual results may be a resolved value or a rejection.
       try {

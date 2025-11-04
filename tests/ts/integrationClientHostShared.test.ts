@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
-import { ObjectSyncHost, ObjectSyncClient, ClientConnection, MethodCallResult, MethodCallResultByClient } from "../../src/index.js";
+import { ObjectSyncHost, ObjectSyncClient, ClientConnection, MethodCallResult, MethodCallResultByClient, getHostObjectInfo } from "../../src/index.js";
 import { Alpha, assertThrowsAsync, Beta, Gamma, resolveOrTimeout } from "./shared.js";
 
 describe("ObjectSyncHost/ObjectSyncClient client-host integration (shared classes)", () => {
@@ -56,7 +56,8 @@ describe("ObjectSyncHost/ObjectSyncClient client-host integration (shared classe
     await client.applyAsync(creationMessages as any);
 
     const expectedResultFromFunctionCall = 42;
-    const results = gamma.alpha.callFunctionOnClients(expectedResultFromFunctionCall, 100)! as unknown as MethodCallResult<number>;
+    const hostResult = gamma.alpha.callFunctionOnClients(expectedResultFromFunctionCall, 100);
+    const methodCallResult = getHostObjectInfo(gamma.alpha)!.getInvokeResults("callFunctionOnClients")!;
 
     const execMessages = host.getMessages().get(clientToken)!;
 
@@ -66,7 +67,7 @@ describe("ObjectSyncHost/ObjectSyncClient client-host integration (shared classe
 
     let result: MethodCallResultByClient<number>;
     try {
-      result = await resolveOrTimeout(1000, results.resultsByClient);
+      result = await resolveOrTimeout(1000, methodCallResult);
     } catch (error) {
       assert.fail("Method execution on client timed out");
     }
@@ -81,14 +82,15 @@ describe("ObjectSyncHost/ObjectSyncClient client-host integration (shared classe
     // Client: applyAsync all creation messages
     await client.applyAsync(creationMessages as any);
 
-    const results = gamma.alpha.callFunctionOnClients(42, 100) as unknown as MethodCallResult<number>;
+    const hostResult = gamma.alpha.callFunctionOnClients(42, 100);
+    const methodCallResult = getHostObjectInfo(gamma.alpha)!.getInvokeResults("callFunctionOnClients")!;
 
     host.getMessages().get(clientToken)!;
     host.untrack(gamma);
 
     let result: MethodCallResultByClient<number>;
     try {
-      result = await resolveOrTimeout(1000, results.resultsByClient);
+      result = await resolveOrTimeout(1000, methodCallResult);
     } catch (error) {
       assert.fail("Method execution on client timed out");
     }
@@ -102,14 +104,15 @@ describe("ObjectSyncHost/ObjectSyncClient client-host integration (shared classe
     // Client: applyAsync all creation messages
     await client.applyAsync(creationMessages as any);
 
-    const results = gamma.alpha.callFunctionOnClients(42, 100) as unknown as MethodCallResult<number>;
+    const hostResult = gamma.alpha.callFunctionOnClients(42, 100);
+    const methodCallResult = getHostObjectInfo(gamma.alpha)!.getInvokeResults("callFunctionOnClients")!;
 
     host.getMessages().get(clientToken)!;
     host.removeClient(clientToken);
 
     let result: MethodCallResultByClient<number>;
     try {
-      result = await resolveOrTimeout(1000, results.resultsByClient);
+      result = await resolveOrTimeout(1000, methodCallResult);
     } catch (error) {
       assert.fail("Method execution on client timed out");
     }
