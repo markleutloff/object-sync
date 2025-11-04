@@ -1,6 +1,6 @@
 {
   "name": "simple-object-sync",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "repository": {
     "url": "https://github.com/markleutloff/object-sync"
@@ -24,8 +24,8 @@
     "watch": "tsc --watch",
     "build:tsc": "tsc",
     "build:bundle": "node esbuild.config.mjs",
-    "build:postprocess-dts": "node postprocess-dts.js",
-    "build": "npm run build:tsc && npm run build:bundle",
+    "build:bundle:dts": "dts-bundle-generator -o dist/index.d.ts src/index.ts",
+    "build": "npm run build:tsc && npm run build:bundle && npm run build:bundle:dts",
     "test:ts": "tsx --test tests/ts/*.test.ts",
     "test:bundle": "tsx --test tests/bundle/*.test.ts",
     "test": "npm run test:ts && npm run test:bundle",
@@ -33,9 +33,11 @@
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
+    "dts-bundle-generator": "^9.5.1",
     "esbuild": "^0.25.11",
     "ts-node": "^10.9.2",
     "tsx": "^4.20.6",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "undici-types": "^7.16.0"
   }
 }

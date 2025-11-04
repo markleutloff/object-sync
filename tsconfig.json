@@ -4,9 +4,15 @@
     "outDir": "build",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
+    "skipLibCheck": false,
     "sourceMap": true,
     "declaration": true,
+    "paths": {
+      // This is solely to stop a bug with @types/node as of 12/15/2023
+      "undici-types": [
+        "./node_modules/undici-types/index.d.ts"
+      ],
+    },
     "target": "ES2022" // or higher
   },
   "include": ["src/**/*"]

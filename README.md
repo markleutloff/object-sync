@@ -16,7 +16,6 @@ Tracks changes on objects and notifies clients. Synchronize object state between
 
 ```bash
 npm install simple-object-sync
-npm i --save-dev @types/simple-object-sync
 ```
 
 ## Basic Usage

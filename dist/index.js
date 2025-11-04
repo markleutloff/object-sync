@@ -62,6 +62,9 @@ function ensureObjectSyncMetaInfo(settings) {
 function getHostObjectInfo(obj) {
   return getObjectSyncMetaInfo(obj)?.host ?? null;
 }
+function getClientObjectInfo(obj) {
+  return getObjectSyncMetaInfo(obj)?.client ?? null;
+}
 
 // build/shared/trackedObjectPool.js
 var TrackedObjectPool = class {
@@ -1445,12 +1448,41 @@ var ObjectSync = class {
     }
   }
 };
+
+// build/client/clientObjectInfo.js
+var ClientObjectInfo = class extends ObjectInfoBase {
+  constructor(objectSyncMetaInfo) {
+    super(objectSyncMetaInfo);
+  }
+};
 export {
+  ClientObjectInfo,
+  HostObjectInfo,
+  ObjectInfoBase,
   ObjectSync,
   ObjectSyncClient,
   ObjectSyncHost,
   SyncableArray,
+  TrackedObjectPool,
+  checkCanUseConstructor,
+  checkCanUseMethod,
+  checkCanUseObject,
+  checkCanUseProperty,
+  createObjectId,
+  defaultConstructorsByTypeId,
+  defaultGeneratorsByTypeId,
+  ensureObjectSyncMetaInfo,
+  getClientObjectInfo,
   getHostObjectInfo,
+  getObjectSyncMetaInfo,
+  getTrackableTypeInfo,
+  invokeOnCreated,
+  invokeOnDeleted,
+  invokeOnUpdateProperty,
+  invokeOnUpdated,
+  isPropertyInfo,
+  isPropertyInfoSymbol,
+  objectSyncSymbol,
   onCreated,
   onDeleted,
   onUpdateProperty,
