@@ -1,0 +1,38 @@
+{
+  "name": "object-sync",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Tracks changes on objects and notifies clients to keep client and host states in sync.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "private": false,
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "author": "Mark Leutloff",
+  "license": "MIT",
+  "scripts": {
+    "watch": "tsc --watch",
+    "build:tsc": "tsc",
+    "build:bundle": "node esbuild.config.mjs",
+    "build:postprocess-dts": "node postprocess-dts.js",
+    "build": "npm run build:tsc && npm run build:bundle",
+    "test:ts": "tsx --test tests/ts/*.test.ts",
+    "test:bundle": "tsx --test tests/bundle/*.test.ts",
+    "test": "npm run test:ts && npm run test:bundle",
+    "build-and-test": "npm run build && npm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "esbuild": "^0.25.11",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.0.0"
+  }
+}
