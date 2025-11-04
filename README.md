@@ -15,7 +15,7 @@ Tracks changes on objects and notifies clients. Synchronize object state between
 ## Installation
 
 ```bash
-npm install object-sync
+npm install simple-object-sync
 ```
 
 ## Basic Usage
