@@ -1,4 +1,5 @@
-import { ObjectSyncClient, syncMethod, syncObject, syncProperty } from "../../src/index.js";
+import { MethodCallResult, ObjectSyncClient, syncMethod, syncObject, syncProperty } from "../../src/index.js";
+import assert from "assert";
 
 @syncObject({})
 export class Beta {
@@ -32,6 +33,23 @@ export class Alpha {
   what(number: number) {
     (this as any)._lastWhat = number;
   }
+
+  @syncMethod({
+    returnResultsByClient: true,
+    clientMethod: "callFunction",
+  })
+  callFunctionOnClients(value: number, timeout: number): number {
+    return 0;
+  }
+
+  @syncMethod()
+  callFunction(value: number, timeout: number) {
+    return new Promise<number>((resolve) => {
+      setTimeout(() => {
+        resolve(value);
+      }, timeout);
+    });
+  }
 }
 
 @syncObject<Gamma>({
@@ -52,4 +70,31 @@ export class Gamma {
   }
   @syncProperty()
   accessor alpha: Alpha;
+}
+
+export async function resolveOrTimeout<T>(timeout: number, promise: Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("Timeout"));
+    }, timeout);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+export async function assertThrowsAsync(promise: Promise<any>, errorMessage: string = "Expected error was not thrown") {
+  try {
+    await promise;
+    assert.fail(errorMessage);
+  } catch (error) {
+    // Expected error was thrown
+  }
 }

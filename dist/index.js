@@ -193,7 +193,7 @@ var ObjectSyncClient = class {
     }
     this._typeIdToGenerator.set(typeId, generator);
   }
-  apply(messages) {
+  async applyAsync(messages) {
     messages.sort((a, b) => {
       if (a.type === b.type)
         return 0;
@@ -224,14 +224,14 @@ var ObjectSyncClient = class {
       const creationMessage = this._pendingCreationMessages.values().next().value;
       this.createNewTrackedObject(creationMessage);
     }
-    messages.forEach((message) => {
+    for (const message of messages) {
       if (isChangeObjectMessage(message))
         this.handleChanges(message);
       else if (isDeleteObjectMessage(message))
         this.deleteTrackedObject(message);
       else if (isExecuteObjectMessage(message))
-        this.executeMethod(message);
-    });
+        await this.executeMethodAsync(message);
+    }
     const result = this._currentClientApplyResult;
     this._currentClientApplyResult = { newTrackedObjects: [], methodExecuteResults: [] };
     return result;
@@ -385,7 +385,7 @@ var ObjectSyncClient = class {
     else if (isCreate)
       invokeOnCreated(tracked, data);
   }
-  executeMethod(data) {
+  async executeMethodAsync(data) {
     if (!isExecuteObjectMessage(data))
       return;
     const tracked = this._trackedObjectPool.get(data.objectId);
@@ -393,7 +393,7 @@ var ObjectSyncClient = class {
       throw new Error(`Cannot find target with id ${data.objectId}`);
     }
     if (!checkCanUseMethod(tracked.constructor, data.method, this._settings.designation)) {
-      this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result: null, status: "sync", error: "Not allowed." });
+      this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "sync", error: "Not allowed." });
       return;
     }
     if (typeof tracked[data.method] !== "function") {
@@ -402,13 +402,14 @@ var ObjectSyncClient = class {
     const args = data.parameters.map((property) => this.getPropertyValue(property));
     const result = tracked[data.method](...args);
     if (result && typeof result.then === "function" && typeof result.catch === "function") {
-      result.then((resolved) => {
-        this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result: resolved, status: "resolved", error: null });
-      }).catch((error) => {
-        this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result: null, status: "rejected", error });
-      });
+      try {
+        const resolved = await result;
+        this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: resolved, status: "resolved", error: null });
+      } catch (error) {
+        this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "rejected", error });
+      }
     } else {
-      this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result, status: "sync", error: null });
+      this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result, status: "sync", error: null });
     }
   }
 };
@@ -475,7 +476,9 @@ function syncMethod(settings) {
     return function(...args) {
       const result = originalMethod.apply(this, args);
       const host = getObjectSyncMetaInfo(this)?.host;
-      host?.onMethodExecute(context.name, ...args);
+      const methodExecuteResult = host?.onMethodExecute(settings.clientMethod ?? context.name, args, result);
+      if (settings.returnResultsByClient && methodExecuteResult)
+        return methodExecuteResult;
       return result;
     };
   };
@@ -830,20 +833,23 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
   /**
    * Constructs a TrackableObject with a typeId and optional objectId.
    */
-  constructor(objectSyncMetaInfo, _isRootObject, _objectIdPrefix) {
+  constructor(objectSyncMetaInfo, _host, _isRootObject, _objectIdPrefix) {
     super(objectSyncMetaInfo);
+    __publicField(this, "_host");
     __publicField(this, "_isRootObject");
     __publicField(this, "_objectIdPrefix");
     /** Holds the current set of property changes for this object. */
     __publicField(this, "_changeSet");
     /** Holds pending method invocation messages for this object. */
     __publicField(this, "_methodInvokeCalls", []);
+    __publicField(this, "_pendingMethodInvokeCalls", /* @__PURE__ */ new Map());
     /** Holds client filter settings for restricting visibility. */
     __publicField(this, "_clientFilters", null);
     /** Holds all registered client-specific views for this object. */
     __publicField(this, "_views", []);
     /** Holds the set of clients which know about this. */
     __publicField(this, "_clients", /* @__PURE__ */ new Set());
+    this._host = _host;
     this._isRootObject = _isRootObject;
     this._objectIdPrefix = _objectIdPrefix;
     this._changeSet = {
@@ -861,7 +867,7 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
     if (!metaInfo) {
       throw new Error("Failed to create HostObjectInfo: unable to ensure ObjectSyncMetaInfo.");
     }
-    metaInfo.host = new _HostObjectInfo(metaInfo, settings.isRoot, settings.objectIdPrefix);
+    metaInfo.host = new _HostObjectInfo(metaInfo, settings.owner, settings.isRoot, settings.objectIdPrefix);
     invokeOnConvertedToTrackable(metaInfo.object, metaInfo.host);
     const trackableTypeInfo = getTrackableTypeInfo(settings.object.constructor);
     if (trackableTypeInfo) {
@@ -886,6 +892,9 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
       throw new Error("Failed to create HostObjectInfo: unable to ensure ObjectSyncMetaInfo.");
     }
     return metaInfo.host ?? this.createFromObject(settings);
+  }
+  get host() {
+    return this._host;
   }
   get clients() {
     return this._clients;
@@ -930,7 +939,7 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
     return this._views;
   }
   /**
-   * Returns all views that apply to a given client.
+   * Returns all views that applyAsync to a given client.
    */
   getViewsForClient(client) {
     return this._views.filter((view) => !view.filter || hasInIterable(view.filter.clients, client) === view.filter.isExclusive);
@@ -972,7 +981,7 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
   /**
    * Records a method execution for this object, converting arguments to trackable references if needed.
    */
-  onMethodExecute(method, ...args) {
+  onMethodExecute(method, args, hostResult) {
     const parameters = [];
     args.forEach((arg, index) => {
       const trackable = this.convertToTrackableObjectReference(arg);
@@ -991,6 +1000,47 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
       method
     };
     this._methodInvokeCalls.push(message);
+    let onRemainingClientsResolved;
+    const resultsByClient = new Promise((resolve) => {
+      onRemainingClientsResolved = resolve;
+    });
+    const result = {
+      hostResult,
+      resultsByClient
+    };
+    this._pendingMethodInvokeCalls.set(message.id, {
+      id: message.id,
+      resultByClient: /* @__PURE__ */ new Map(),
+      remainingClients: [],
+      result,
+      onRemainingClientsResolved
+    });
+    return result;
+  }
+  onClientMethodExecuteSendToClient(client, invokeId) {
+    const pendingCall = this._pendingMethodInvokeCalls.get(invokeId);
+    if (!pendingCall)
+      return;
+    pendingCall.remainingClients.push(client);
+  }
+  onClientMethodExecuteResultReceived(methodExecuteResult, client) {
+    const pendingCall = this._pendingMethodInvokeCalls.get(methodExecuteResult.id);
+    if (!pendingCall)
+      return;
+    if (this.clients.has(client)) {
+      pendingCall.resultByClient.set(client, new Promise((resolve, reject) => {
+        if (methodExecuteResult.status === "resolved" || methodExecuteResult.status === "sync") {
+          resolve(methodExecuteResult.result);
+        } else {
+          reject(methodExecuteResult.error);
+        }
+      }));
+    }
+    pendingCall.remainingClients = pendingCall.remainingClients.filter((c) => c !== client);
+    if (pendingCall.remainingClients.length === 0) {
+      this._pendingMethodInvokeCalls.delete(methodExecuteResult.id);
+      pendingCall.onRemainingClientsResolved(pendingCall.resultByClient);
+    }
   }
   /**
    * Converts a value to a trackable object reference if possible.
@@ -1000,7 +1050,8 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
       return _HostObjectInfo.tryEnsureAutoTrackable({
         object: target,
         isRoot: false,
-        objectIdPrefix: this._objectIdPrefix
+        objectIdPrefix: this._objectIdPrefix,
+        owner: this.host
       });
     }
     return null;
@@ -1034,7 +1085,27 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
       type: "delete",
       objectId: this.objectId
     };
+    this.cancelPendingMethodCalls();
     return result;
+  }
+  onClientRemoved(clientConnection) {
+    this.clients.delete(clientConnection);
+    this.cancelPendingMethodCalls(clientConnection);
+  }
+  cancelPendingMethodCalls(clientConnection) {
+    this._pendingMethodInvokeCalls.forEach((pendingCall) => {
+      pendingCall.remainingClients.forEach((client) => {
+        if (clientConnection && client !== clientConnection)
+          return;
+        this.onClientMethodExecuteResultReceived({
+          id: pendingCall.id,
+          status: "rejected",
+          error: new Error("Object deleted before method could be executed"),
+          objectId: this.objectId,
+          result: void 0
+        }, client);
+      });
+    });
   }
   /**
    * Generates a change message for this object for a given client, including only changed properties.
@@ -1055,9 +1126,13 @@ var HostObjectInfo = class _HostObjectInfo extends ObjectInfoBase {
    * Returns all pending execute messages for this object.
    */
   getExecuteMessages(client) {
-    return this._methodInvokeCalls.filter((msg) => {
+    const result = this._methodInvokeCalls.filter((msg) => {
       return checkCanUseMethod(this.object.constructor, msg.method, client.designation);
     });
+    result.forEach((msg) => {
+      this.onClientMethodExecuteSendToClient(client, msg.id);
+    });
+    return result;
   }
   /**
    * Gathers property info for this object for a given client, applying any view-based property overrides.
@@ -1119,6 +1194,9 @@ var ObjectSyncHost = class {
     }
     this._trackedObjectPool = this._settings.objectPool ?? new TrackedObjectPool();
   }
+  get designation() {
+    return this._settings.designation;
+  }
   /** Returns all currently tracked objects. */
   get allTrackedObjects() {
     return this._trackedObjectPool.all;
@@ -1137,7 +1215,7 @@ var ObjectSyncHost = class {
     }
     this._trackedObjectPool.all.forEach((obj) => {
       const hostObjectInfo = getHostObjectInfo(obj);
-      hostObjectInfo.clients.delete(client);
+      hostObjectInfo.onClientRemoved(client);
     });
     this._untrackedObjectInfosByClient.delete(client);
     this._clients.delete(client);
@@ -1194,7 +1272,8 @@ var ObjectSyncHost = class {
       objectId: trackSettings?.objectId,
       isRoot,
       object: target,
-      objectIdPrefix: this._settings.objectIdPrefix
+      objectIdPrefix: this._settings.objectIdPrefix,
+      owner: this
     };
     const hostObjectInfo = getHostObjectInfo(target) ?? HostObjectInfo.tryEnsureAutoTrackable(creationSettings) ?? HostObjectInfo.createFromObject(creationSettings);
     if (!hostObjectInfo)
@@ -1366,6 +1445,15 @@ var ObjectSyncHost = class {
     const executeMessages = hostObjectInfo.getExecuteMessages(client);
     messages.push(...executeMessages);
   }
+  applyClientMethodInvokeResults(client, methodExecuteResults) {
+    for (const result of methodExecuteResults) {
+      const tracked = this._trackedObjectPool.get(result.objectId);
+      if (!tracked)
+        continue;
+      const hostObjectInfo = getHostObjectInfo(tracked);
+      hostObjectInfo?.onClientMethodExecuteResultReceived(result, client);
+    }
+  }
   tick() {
     this._trackedObjectPool.all.forEach((obj) => {
       const hostObjectInfo = getHostObjectInfo(obj);
@@ -1436,15 +1524,16 @@ var ObjectSync = class {
   getMessages() {
     return this._host.getMessages();
   }
-  applyMessages(messagesByClient) {
+  async applyMessagesAsync(messagesByClient) {
     for (const [clientToken, messages] of messagesByClient) {
-      const results = this._client.apply(messages);
+      const results = await this._client.applyAsync(messages);
       for (const obj of results.newTrackedObjects) {
         this._host.track(obj, {
           ignoreAlreadyTracked: true,
           knownClients: clientToken
         });
       }
+      this.host.applyClientMethodInvokeResults(clientToken, results.methodExecuteResults);
     }
   }
 };

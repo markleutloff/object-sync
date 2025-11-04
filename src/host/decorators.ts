@@ -11,9 +11,21 @@ type TrackedPropertySettings = {
   designations?: string;
 };
 
+type TrackedMethodSettings = TrackedPropertySettings & {
+  /*
+   * Optional name of the method on the client side to map to, if different from the host side.
+   * When not provided the same method name will be used.
+   */
+  clientMethod?: string;
+  /*
+   * Whether the method should return results from clients. When set to true the methods return type will be of AsyncMethodCallPromiseByClient<T>.
+   */
+  returnResultsByClient?: boolean;
+};
+
 type TrackableConstructorInfo = {
   trackedProperties: Map<string, TrackedPropertySettings>;
-  trackedMethods: Map<string, TrackedPropertySettings>;
+  trackedMethods: Map<string, TrackedMethodSettings>;
   isAutoTrackable: boolean;
   typeId?: string;
   designations?: OneOrMany<string>;
@@ -59,7 +71,7 @@ export function syncProperty<This, Return>(settings?: TrackedPropertySettings) {
  * Method decorator for marking a method as trackable.
  * Ensures method calls are recorded for all TrackableObject instances.
  */
-export function syncMethod<This, Return>(settings?: TrackedPropertySettings) {
+export function syncMethod<This, Return>(settings?: TrackedMethodSettings) {
   settings ??= {};
 
   return function syncMethod(target: any, context: ClassMethodDecoratorContext) {
@@ -71,7 +83,9 @@ export function syncMethod<This, Return>(settings?: TrackedPropertySettings) {
       const result = originalMethod.apply(this, args);
 
       const host = getObjectSyncMetaInfo(this)?.host;
-      host?.onMethodExecute(context.name as any, ...args);
+      const methodExecuteResult = host?.onMethodExecute(settings.clientMethod ?? (context.name as any), args, result);
+
+      if (settings.returnResultsByClient && methodExecuteResult) return methodExecuteResult;
 
       return result;
     };

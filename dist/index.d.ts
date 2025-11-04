@@ -41,9 +41,10 @@ export type Message<T extends object = object, TAdditionalPropertyInfo extends o
 export declare function isPropertyInfo(value: any): value is PropertyInfo<any, any>;
 export type MethodExecuteResult = {
 	id: unknown;
+	objectId: unknown;
 	result: any;
 	status: "resolved" | "rejected" | "sync";
-	error: string | null;
+	error: any;
 };
 export declare class ClientObjectInfo<T extends object> extends ObjectInfoBase {
 	constructor(objectSyncMetaInfo: ObjectSyncMetaInfo);
@@ -90,6 +91,7 @@ export declare class ObjectSyncHost {
 	private _untrackedObjectInfosByClient;
 	private _clients;
 	constructor(_settings?: ObjectSyncHostSettings);
+	get designation(): string | undefined;
 	/** Returns all currently tracked objects. */
 	get allTrackedObjects(): object[];
 	registerClient(settings?: ClientConnectionSettings): ClientConnection;
@@ -142,6 +144,7 @@ export declare class ObjectSyncHost {
 	 * Also tracks any nested objects referenced in the message.
 	 */
 	private getMessagesForTrackableObjectInfo;
+	applyClientMethodInvokeResults(client: ClientConnection, methodExecuteResults: MethodExecuteResult[]): void;
 	private tick;
 	/**
 	 * Removes all tracked objects that are not reachable from any of the provided root objects.
@@ -190,12 +193,20 @@ export type ClientSpecificView<T extends object> = {
 export type ServerObjectSyncMetaInfoCreateSettings<T extends object> = ObjectSyncMetaInfoCreateSettings<T> & {
 	isRoot: boolean;
 	objectIdPrefix: string;
+	owner: ObjectSyncHost;
+};
+export type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
+export type MethodCallResultByClient<T> = Map<ClientConnection, Promise<UnwrapPromise<T>>>;
+export type MethodCallResult<T> = {
+	resultsByClient: Promise<MethodCallResultByClient<T>>;
+	hostResult: T;
 };
 /**
  * TrackableObject wraps an object for change tracking and client synchronization on the host side.
  * It manages property changes, client-specific views, and message generation for create, change, delete, and execute operations.
  */
 export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
+	private readonly _host;
 	private _isRootObject;
 	private readonly _objectIdPrefix;
 	/**
@@ -212,6 +223,7 @@ export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
 	private readonly _changeSet;
 	/** Holds pending method invocation messages for this object. */
 	private readonly _methodInvokeCalls;
+	private readonly _pendingMethodInvokeCalls;
 	/** Holds client filter settings for restricting visibility. */
 	private _clientFilters;
 	/** Holds all registered client-specific views for this object. */
@@ -222,6 +234,7 @@ export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
 	 * Constructs a TrackableObject with a typeId and optional objectId.
 	 */
 	private constructor();
+	get host(): ObjectSyncHost;
 	get clients(): Set<ClientConnection>;
 	get isRootObject(): boolean;
 	set isRootObject(value: boolean);
@@ -244,7 +257,7 @@ export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
 	 */
 	get allRegisteredViews(): readonly ClientSpecificView<T>[];
 	/**
-	 * Returns all views that apply to a given client.
+	 * Returns all views that applyAsync to a given client.
 	 */
 	getViewsForClient(client: ClientConnection): ClientSpecificView<T>[];
 	/**
@@ -262,7 +275,9 @@ export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
 	/**
 	 * Records a method execution for this object, converting arguments to trackable references if needed.
 	 */
-	onMethodExecute(method: keyof T, ...args: any[]): void;
+	onMethodExecute(method: keyof T, args: any[], hostResult: any): MethodCallResult<any>;
+	private onClientMethodExecuteSendToClient;
+	onClientMethodExecuteResultReceived(methodExecuteResult: MethodExecuteResult, client: ClientConnection): void;
 	/**
 	 * Converts a value to a trackable object reference if possible.
 	 */
@@ -276,6 +291,8 @@ export declare class HostObjectInfo<T extends object> extends ObjectInfoBase {
 	 * Generates a delete message for this object.
 	 */
 	getDeleteMessage(): DeleteObjectMessage;
+	onClientRemoved(clientConnection: ClientConnection): void;
+	cancelPendingMethodCalls(clientConnection?: ClientConnection): void;
 	/**
 	 * Generates a change message for this object for a given client, including only changed properties.
 	 * Returns null if there are no changes.
@@ -368,7 +385,7 @@ export declare class ObjectSyncClient {
 	registerConstructorOrGenerator(typeId: string, constructorOrGenerator: Constructor | TrackableTargetGenerator): void;
 	registerConstructor(typeId: string, constructor: Constructor): void;
 	registerGenerator(typeId: string, generator: TrackableTargetGenerator): void;
-	apply(messages: Message<any>[]): ClientApplyResult;
+	applyAsync(messages: Message<any>[]): Promise<ClientApplyResult>;
 	/**
 	 * Resolves a property value, returning the tracked object if objectId is present, or the value otherwise.
 	 * If the object is not yet tracked, attempts to create it from pending messages.
@@ -385,7 +402,7 @@ export declare class ObjectSyncClient {
 	private createResolvablePropertyInfos;
 	private createNewTrackedObject;
 	private handleChanges;
-	private executeMethod;
+	private executeMethodAsync;
 }
 export declare const onCreated: unique symbol;
 export declare const onUpdated: unique symbol;
@@ -460,7 +477,7 @@ export declare class ObjectSync {
 	get host(): ObjectSyncHost;
 	get client(): ObjectSyncClient;
 	getMessages(): Map<ClientConnection, Message[]>;
-	applyMessages(messagesByClient: Map<ClientConnection, Message[]>): void;
+	applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<void>;
 }
 type Constructor$1<T = any> = {
 	new (...args: any[]): T;
@@ -468,9 +485,13 @@ type Constructor$1<T = any> = {
 export type TrackedPropertySettings = {
 	designations?: string;
 };
+export type TrackedMethodSettings = TrackedPropertySettings & {
+	clientMethod?: string;
+	returnResultsByClient?: boolean;
+};
 export type TrackableConstructorInfo = {
 	trackedProperties: Map<string, TrackedPropertySettings>;
-	trackedMethods: Map<string, TrackedPropertySettings>;
+	trackedMethods: Map<string, TrackedMethodSettings>;
 	isAutoTrackable: boolean;
 	typeId?: string;
 	designations?: OneOrMany<string>;
@@ -495,7 +516,7 @@ export declare function syncProperty<This, Return>(settings?: TrackedPropertySet
  * Method decorator for marking a method as trackable.
  * Ensures method calls are recorded for all TrackableObject instances.
  */
-export declare function syncMethod<This, Return>(settings?: TrackedPropertySettings): (target: any, context: ClassMethodDecoratorContext) => (this: any, ...args: any[]) => any;
+export declare function syncMethod<This, Return>(settings?: TrackedMethodSettings): (target: any, context: ClassMethodDecoratorContext) => (this: any, ...args: any[]) => any;
 /**
  * Retrieves the TrackableConstructorInfo metadata for a class constructor, if present.
  */

@@ -1,6 +1,17 @@
-import { PropertyInfo, CreateObjectMessage, PropertyInfos, ChangeObjectMessage, Message, DeleteObjectMessage, ExecuteObjectMessage, isPropertyInfoSymbol } from "../shared/index.js";
+import {
+  PropertyInfo,
+  CreateObjectMessage,
+  PropertyInfos,
+  ChangeObjectMessage,
+  Message,
+  DeleteObjectMessage,
+  ExecuteObjectMessage,
+  isPropertyInfoSymbol,
+  ObjectSync,
+  MethodExecuteResult,
+} from "../shared/index.js";
 import { checkCanUseMethod, checkCanUseProperty, getTrackableTypeInfo } from "./decorators.js";
-import { ClientConnection } from "./host.js";
+import { ClientConnection, ObjectSyncHost } from "./host.js";
 import { ensureObjectSyncMetaInfo, getObjectSyncMetaInfo, ObjectSyncMetaInfo, ObjectSyncMetaInfoCreateSettings, ObjectInfoBase } from "../shared/objectSyncMetaInfo.js";
 import { invokeOnConvertedToTrackable, invokeOnTick } from "./trackedTarget.js";
 import { Constructor, hasInIterable, OneOrMany, toIterable } from "../shared/types.js";
@@ -70,6 +81,23 @@ export type ClientSpecificView<T extends object> = {
 export type ServerObjectSyncMetaInfoCreateSettings<T extends object> = ObjectSyncMetaInfoCreateSettings<T> & {
   isRoot: boolean;
   objectIdPrefix: string;
+  owner: ObjectSyncHost;
+};
+
+type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
+export type MethodCallResultByClient<T> = Map<ClientConnection, Promise<UnwrapPromise<T>>>;
+
+export type MethodCallResult<T> = {
+  resultsByClient: Promise<MethodCallResultByClient<T>>;
+  hostResult: T;
+};
+
+type PendingMethodCall = {
+  id: unknown;
+  remainingClients: ClientConnection[];
+  resultByClient: Map<ClientConnection, Promise<any>>;
+  result: MethodCallResult<any>;
+  onRemainingClientsResolved: (value: Map<ClientConnection, Promise<any>>) => void;
 };
 
 /**
@@ -86,7 +114,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
     if (!metaInfo) {
       throw new Error("Failed to create HostObjectInfo: unable to ensure ObjectSyncMetaInfo.");
     }
-    metaInfo.host = new HostObjectInfo<T>(metaInfo, settings.isRoot, settings.objectIdPrefix);
+    metaInfo.host = new HostObjectInfo<T>(metaInfo, settings.owner, settings.isRoot, settings.objectIdPrefix);
     invokeOnConvertedToTrackable(metaInfo.object as T, metaInfo.host);
 
     const trackableTypeInfo = getTrackableTypeInfo((settings.object as any).constructor);
@@ -120,6 +148,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   private readonly _changeSet: HostChangeObjectMessage<T>;
   /** Holds pending method invocation messages for this object. */
   private readonly _methodInvokeCalls: ExecuteObjectMessage<T>[] = [];
+  private readonly _pendingMethodInvokeCalls: Map<unknown, PendingMethodCall> = new Map();
   /** Holds client filter settings for restricting visibility. */
   private _clientFilters: ClientFilter | null = null;
   /** Holds all registered client-specific views for this object. */
@@ -130,7 +159,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   /**
    * Constructs a TrackableObject with a typeId and optional objectId.
    */
-  private constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, private _isRootObject: boolean, private readonly _objectIdPrefix: string) {
+  private constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, private readonly _host: ObjectSyncHost, private _isRootObject: boolean, private readonly _objectIdPrefix: string) {
     super(objectSyncMetaInfo);
 
     this._changeSet = {
@@ -138,6 +167,10 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
       objectId: this.objectId,
       properties: {},
     };
+  }
+
+  get host() {
+    return this._host;
   }
 
   get clients(): Set<ClientConnection> {
@@ -190,7 +223,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   }
 
   /**
-   * Returns all views that apply to a given client.
+   * Returns all views that applyAsync to a given client.
    */
   getViewsForClient(client: ClientConnection): ClientSpecificView<T>[] {
     return this._views.filter((view) => !view.filter || hasInIterable(view.filter.clients, client) === view.filter.isExclusive);
@@ -222,8 +255,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
     if (!current) {
       current = { hasPendingChanges: true, [isPropertyInfoSymbol]: true };
       this._changeSet.properties[key] = current;
-    }
-    else if (current.value === value) {
+    } else if (current.value === value) {
       return;
     }
 
@@ -239,7 +271,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   /**
    * Records a method execution for this object, converting arguments to trackable references if needed.
    */
-  onMethodExecute(method: keyof T, ...args: any[]) {
+  onMethodExecute(method: keyof T, args: any[], hostResult: any) {
     const parameters: PropertyInfos<any, any>[] = [];
     args.forEach((arg, index) => {
       const trackable = this.convertToTrackableObjectReference(arg);
@@ -250,6 +282,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
       };
       parameters.push(paramInfo);
     });
+
     const message: ExecuteObjectMessage<T> = {
       type: "execute",
       id: nextInvokeId++,
@@ -257,7 +290,59 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
       parameters: parameters as any,
       method: method as any,
     };
+
     this._methodInvokeCalls.push(message);
+
+    let onRemainingClientsResolved: (result: Map<ClientConnection, Promise<T>>) => void;
+    const resultsByClient = new Promise<Map<ClientConnection, Promise<T>>>((resolve) => {
+      onRemainingClientsResolved = resolve;
+    });
+
+    const result: MethodCallResult<any> = {
+      hostResult,
+      resultsByClient,
+    };
+
+    this._pendingMethodInvokeCalls.set(message.id, {
+      id: message.id,
+      resultByClient: new Map(),
+      remainingClients: [],
+      result,
+      onRemainingClientsResolved: onRemainingClientsResolved!,
+    });
+
+    return result;
+  }
+
+  private onClientMethodExecuteSendToClient(client: ClientConnection, invokeId: unknown) {
+    const pendingCall = this._pendingMethodInvokeCalls.get(invokeId);
+    if (!pendingCall) return;
+
+    pendingCall.remainingClients.push(client);
+  }
+
+  onClientMethodExecuteResultReceived(methodExecuteResult: MethodExecuteResult, client: ClientConnection) {
+    const pendingCall = this._pendingMethodInvokeCalls.get(methodExecuteResult.id);
+    if (!pendingCall) return;
+
+    if (this.clients.has(client)) {
+      pendingCall.resultByClient.set(
+        client,
+        new Promise<any>((resolve, reject) => {
+          if (methodExecuteResult.status === "resolved" || methodExecuteResult.status === "sync") {
+            resolve(methodExecuteResult.result);
+          } else {
+            reject(methodExecuteResult.error);
+          }
+        })
+      );
+    }
+
+    pendingCall.remainingClients = pendingCall.remainingClients.filter((c) => c !== client);
+    if (pendingCall.remainingClients.length === 0) {
+      this._pendingMethodInvokeCalls.delete(methodExecuteResult.id);
+      pendingCall.onRemainingClientsResolved(pendingCall.resultByClient);
+    }
   }
 
   /**
@@ -269,6 +354,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
         object: target,
         isRoot: false,
         objectIdPrefix: this._objectIdPrefix,
+        owner: this.host,
       });
     }
     return null;
@@ -303,7 +389,31 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
       type: "delete",
       objectId: this.objectId,
     };
+    this.cancelPendingMethodCalls();
     return result;
+  }
+
+  onClientRemoved(clientConnection: ClientConnection) {
+    this.clients.delete(clientConnection);
+    this.cancelPendingMethodCalls(clientConnection);
+  }
+
+  cancelPendingMethodCalls(clientConnection?: ClientConnection): void {
+    this._pendingMethodInvokeCalls.forEach((pendingCall) => {
+      pendingCall.remainingClients.forEach((client) => {
+        if (clientConnection && client !== clientConnection) return;
+        this.onClientMethodExecuteResultReceived(
+          {
+            id: pendingCall.id,
+            status: "rejected",
+            error: new Error("Object deleted before method could be executed"),
+            objectId: this.objectId,
+            result: undefined,
+          },
+          client
+        );
+      });
+    });
   }
 
   /**
@@ -325,9 +435,13 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
    * Returns all pending execute messages for this object.
    */
   getExecuteMessages(client: ClientConnection): ExecuteObjectMessage<T>[] {
-    return this._methodInvokeCalls.filter((msg) => {
+    const result = this._methodInvokeCalls.filter((msg) => {
       return checkCanUseMethod(this.object.constructor as Constructor, msg.method, client.designation);
     });
+    result.forEach((msg) => {
+      this.onClientMethodExecuteSendToClient(client, msg.id);
+    });
+    return result;
   }
 
   /**

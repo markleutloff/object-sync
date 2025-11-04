@@ -1,4 +1,4 @@
-import { ChangeObjectMessage, CreateObjectMessage, DeleteObjectMessage, ExecuteObjectMessage, isPropertyInfo, Message, PropertyInfo, TrackedObjectPool } from "../shared/index.js";
+import { ChangeObjectMessage, CreateObjectMessage, DeleteObjectMessage, ExecuteObjectMessage, isPropertyInfo, Message, MethodExecuteResult, PropertyInfo, TrackedObjectPool } from "../shared/index.js";
 import { getHostObjectInfo } from "../shared/objectSyncMetaInfo.js";
 import { forEachIterable, OneOrMany } from "../shared/types.js";
 import { checkCanUseObject } from "./decorators.js";
@@ -60,6 +60,10 @@ export class ObjectSyncHost {
     this._trackedObjectPool = this._settings.objectPool ?? new TrackedObjectPool();
   }
 
+  get designation() {
+    return this._settings.designation;
+  }
+
   /** Returns all currently tracked objects. */
   get allTrackedObjects() {
     return this._trackedObjectPool.all;
@@ -81,7 +85,7 @@ export class ObjectSyncHost {
 
     this._trackedObjectPool.all.forEach((obj) => {
       const hostObjectInfo = getHostObjectInfo(obj)!;
-      hostObjectInfo.clients.delete(client);
+      hostObjectInfo.onClientRemoved(client);
     });
     this._untrackedObjectInfosByClient.delete(client);
 
@@ -144,6 +148,7 @@ export class ObjectSyncHost {
       isRoot,
       object: target,
       objectIdPrefix: this._settings.objectIdPrefix!,
+      owner: this,
     };
 
     const hostObjectInfo: HostObjectInfo<T> | null = getHostObjectInfo(target) ?? HostObjectInfo.tryEnsureAutoTrackable<T>(creationSettings) ?? HostObjectInfo.createFromObject(creationSettings);
@@ -331,6 +336,15 @@ export class ObjectSyncHost {
 
     const executeMessages = hostObjectInfo.getExecuteMessages(client) as ExecuteObjectMessage<object>[];
     messages.push(...executeMessages);
+  }
+
+  public applyClientMethodInvokeResults(client: ClientConnection, methodExecuteResults: MethodExecuteResult[]) {
+    for (const result of methodExecuteResults) {
+      const tracked = this._trackedObjectPool.get(result.objectId);
+      if (!tracked) continue;
+      const hostObjectInfo = getHostObjectInfo(tracked);
+      hostObjectInfo?.onClientMethodExecuteResultReceived(result, client);
+    }
   }
 
   private tick(): void {

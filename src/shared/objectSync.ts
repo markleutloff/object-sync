@@ -36,15 +36,17 @@ export class ObjectSync {
     return this._host.getMessages();
   }
 
-  applyMessages(messagesByClient: Map<ClientConnection, Message[]>): void {
+  async applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<void> {
     for (const [clientToken, messages] of messagesByClient) {
-      const results = this._client.apply(messages);
+      const results = await this._client.applyAsync(messages);
       for (const obj of results.newTrackedObjects) {
         this._host.track(obj, {
           ignoreAlreadyTracked: true,
           knownClients: clientToken,
         });
       }
+
+      this.host.applyClientMethodInvokeResults(clientToken, results.methodExecuteResults);
     }
   }
 }

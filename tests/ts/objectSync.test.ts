@@ -30,26 +30,26 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 
   it("should sync objects and methods between host and client", async () => {
     hBeta.value = 1;
-    exchangeMessages();
+    await exchangeMessagesAsync();
 
     const cBeta = objectSync1.client.findObjectOfType(Beta)!;
     assert.strictEqual(cBeta.value, hBeta.value);
 
     hBeta.value = 2;
     assert.notStrictEqual(cBeta.value, hBeta.value);
-    exchangeMessages();
+    await exchangeMessagesAsync();
     assert.strictEqual(cBeta.value, hBeta.value);
 
     cBeta.value = 3;
     assert.notStrictEqual(cBeta.value, hBeta.value);
-    exchangeMessages();
+    await exchangeMessagesAsync();
     assert.strictEqual(cBeta.value, hBeta.value);
 
-    function exchangeMessages() {
+    async function exchangeMessagesAsync() {
       const h2cMessages = objectSync0.getMessages();
-      objectSync1.applyMessages(h2cMessages);
+      await objectSync1.applyMessagesAsync(h2cMessages);
       const c2hMessages = objectSync1.getMessages();
-      objectSync0.applyMessages(c2hMessages);
+      await objectSync0.applyMessagesAsync(c2hMessages);
     }
   });
 });

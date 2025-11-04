@@ -51,7 +51,8 @@ export function isPropertyInfo(value: any): value is PropertyInfo<any, any> {
 
 export type MethodExecuteResult = {
   id: unknown;
+  objectId: unknown;
   result: any;
   status: "resolved" | "rejected" | "sync";
-  error: string | null;
+  error: any;
 };

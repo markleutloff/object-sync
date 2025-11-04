@@ -57,20 +57,20 @@ hostSync.host.track(beta);
 ### 3. Synchronize State
 
 ```typescript
-function exchangeMessages() {
+async function exchangeMessagesAsync() {
   const h2cMessages = hostSync.getMessages();
-  clientSync.applyMessages(h2cMessages);
+  clientSync.applyMessagesAsync(h2cMessages);
   const c2hMessages = clientSync.getMessages();
-  hostSync.applyMessages(c2hMessages);
+  hostSync.applyMessagesAsync(c2hMessages);
 }
 
 beta.value = 1;
-exchangeMessages();
+await exchangeMessagesAsync();
 const clientBeta = clientSync.client.findObjectOfType(Beta)!;
 console.log(clientBeta.value); // 1
 
 beta.value = 2;
-exchangeMessages();
+await exchangeMessagesAsync();
 console.log(clientBeta.value); // 2
 ```
 
@@ -78,10 +78,53 @@ console.log(clientBeta.value); // 2
 
 When you decorate a method with `@syncMethod()`, calling this method on the host will schedule its execution on all clients. The method will be executed after all other property changes have been applied on any client, ensuring state consistency before method logic runs.
 
+All methods called as such will be awaited for their return value (as in when a method returns a promise the application of changes will wait until those promise has been resolved or rejected).
+
 ```typescript
 beta.increment(); // Host increments value
-exchangeMessages();
+await exchangeMessagesAsync();
 console.log(clientBeta.value); // 3 (method executed after sync)
+```
+
+It is also possible to let the method return a accumulation of host and client results.
+
+```typescript
+import { syncObject, syncMethod, MethodCallResult } from "simple-object-sync";
+
+@syncObject({ typeId: "Beta" })
+class Beta {
+  @syncMethod({
+    returnResultsByClient: true,
+    clientMethod: "callFunction", // When omitted will simply call callFunctionOnClients on all clients
+  })
+  callFunctionOnClients(value: number): number | MethodCallResult<number> {
+    return 123;
+  }
+
+  @syncMethod()
+  callFunction(value: number) {
+    return value;
+  }
+}
+
+const beta = new Beta();
+...
+const callResults = beta.callFunctionOnClients(42) as unknown as MethodCallResult<number>;
+console.log(`The hosts method returned: ${callResults.hostResult}`)
+
+// resultsByClient is a promise because we do not know the clients yet 
+callResults.resultsByClient.then(async (clientAndResult) => {
+   for (const [client, promise] of clientAndResult) {
+      // Individual results may be a resolved value or a rejection.
+      try {
+         const value = await promise;
+         console.log(`Method call on client ${client} returned: ${value}`);
+      }
+      catch (error)  {
+         console.error(`Method call on client ${client} returned an error: ${value}`);
+      }
+   }
+});
 ```
 
 ## Restricting Changes to Specific Clients
@@ -117,7 +160,7 @@ getHostObjectInfo(beta)?.addView({
 When creating `ObjectSync` instances or registering clients, you can specify a `designation` value:
 
 - `designation` is a string that identifies the role or type of a client or host (e.g., "host", "clientA", "clientB").
-- This value is used in message transfer and application to filter which clients should receive or apply certain changes.
+- This value is used in message transfer and application to filter which clients should receive or applyAsync certain changes.
 - You can use designations in `ClientFilter` to include or exclude clients by their designation.
 - syncObject, syncProperty and synncMethod decorators can receive the designations property too, which also acts as an filter.
 
@@ -153,7 +196,7 @@ hostSync.host.track(arr, { clientVisibility: { clients: clientToken } });
 
 // Exchange messages to sync initial state
 const creationMessages = hostSync.getMessages().get(clientToken)!;
-clientSync.client.apply(creationMessages);
+await clientSync.client.applyAsync(creationMessages);
 
 // Access the synced array on the client
 const clientArr = clientSync.client.findObjectOfType(SyncableArray)!;
@@ -165,7 +208,7 @@ arr.splice(1, 1); // Remove the second item
 
 // Sync changes to the client
 const changeMessages = hostSync.getMessages().get(clientToken)!;
-clientSync.client.apply(changeMessages);
+await clientSync.client.applyAsync(changeMessages);
 
 console.log(clientArr.value); // [1, 3, 4, 5]
 ```
@@ -216,7 +259,7 @@ protected onAdded(start: number, items: T[]): void {
 
 ### Advanced Concepts
 
-- **Designation**: Filter which clients receive or apply changes using roles
+- **Designation**: Filter which clients receive or applyAsync changes using roles
 - **Client-specific views**: Customize property values or visibility per client
 - **SyncableArray events**: Override `onAdded` and `onRemoved` for event-driven array changes
 

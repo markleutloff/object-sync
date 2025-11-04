@@ -72,7 +72,7 @@ export class ObjectSyncClient {
     this._typeIdToGenerator.set(typeId, generator);
   }
 
-  apply(messages: Message<any>[]): ClientApplyResult {
+  async applyAsync(messages: Message<any>[]): Promise<ClientApplyResult> {
     // sort messages by type, first all creation messages, then update, then execute, then deletion
     messages.sort((a, b) => {
       if (a.type === b.type) return 0;
@@ -100,11 +100,11 @@ export class ObjectSyncClient {
       this.createNewTrackedObject(creationMessage);
     }
 
-    messages.forEach((message) => {
+    for (const message of messages) {
       if (isChangeObjectMessage(message)) this.handleChanges(message);
       else if (isDeleteObjectMessage(message)) this.deleteTrackedObject(message);
-      else if (isExecuteObjectMessage(message)) this.executeMethod(message);
-    });
+      else if (isExecuteObjectMessage(message)) await this.executeMethodAsync(message);
+    }
 
     const result = this._currentClientApplyResult!;
     this._currentClientApplyResult = { newTrackedObjects: [], methodExecuteResults: [] };
@@ -278,7 +278,7 @@ export class ObjectSyncClient {
     else if (isCreate) invokeOnCreated(tracked, data);
   }
 
-  private executeMethod(data: Message<any>): void {
+  private async executeMethodAsync(data: Message<any>): Promise<void> {
     if (!isExecuteObjectMessage(data)) return;
 
     const tracked = this._trackedObjectPool.get(data.objectId) as any;
@@ -287,7 +287,7 @@ export class ObjectSyncClient {
     }
 
     if (!checkCanUseMethod(tracked.constructor as Constructor, data.method, this._settings.designation)) {
-      this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result: null, status: "sync", error: "Not allowed." });
+      this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "sync", error: "Not allowed." });
       return;
     }
 
@@ -300,17 +300,16 @@ export class ObjectSyncClient {
 
     // Store reply, handle Promise
     if (result && typeof result.then === "function" && typeof result.catch === "function") {
-      // Promise result
-      result
-        .then((resolved: any) => {
-          this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result: resolved, status: "resolved", error: null });
-        })
-        .catch((error: any) => {
-          this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result: null, status: "rejected", error: error });
-        });
+      try {
+        const resolved = await result;
+
+        this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: resolved, status: "resolved", error: null });
+      } catch (error) {
+        this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "rejected", error: error });
+      }
     } else {
       // Synchronous result
-      this._currentClientApplyResult.methodExecuteResults.push({ id: data.id, result, status: "sync", error: null });
+      this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result, status: "sync", error: null });
     }
   }
 }
