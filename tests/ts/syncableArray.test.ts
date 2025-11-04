@@ -24,7 +24,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const creationMessages = host.getMessages().get(clientToken)!;
     client.apply(creationMessages);
 
-    const alphaClient = client.findTrackedObject(SyncableArray<string>)!;
+    const alphaClient = client.findObjectOfType(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha.value, alphaClient.value);
   });
 
@@ -36,7 +36,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = host.getMessages().get(clientToken)!;
     client.apply(changeMessages);
 
-    const alphaClient = client.findTrackedObject(SyncableArray<string>)!;
+    const alphaClient = client.findObjectOfType(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha.value, alphaClient.value);
   });
 
@@ -49,7 +49,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = host.getMessages().get(clientToken)!;
     client.apply(changeMessages);
 
-    const alphaClient = client.findTrackedObject(SyncableArray<string>)!;
+    const alphaClient = client.findObjectOfType(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha.value, alphaClient.value);
   });
 
@@ -66,7 +66,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = host.getMessages().get(clientToken)!;
     client.apply(changeMessages);
 
-    const alphaClient = client.findTrackedObject(SyncableArray<string>)!;
+    const alphaClient = client.findObjectOfType(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha.value, alphaClient.value);
   });
 
@@ -81,14 +81,14 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = host.getMessages().get(clientToken)!;
     client.apply(changeMessages);
 
-    const alphaClient = client.findTrackedObject(SyncableArray<string>)!;
+    const alphaClient = client.findObjectOfType(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha.value, alphaClient.value);
   });
 
   it("should transfer only a single push change", () => {
     const creationMessages = host.getMessages().get(clientToken)!;
     client.apply(creationMessages);
-    const alphaClient = client.findTrackedObject(SyncableArray<string>)!;
+    const alphaClient = client.findObjectOfType(SyncableArray<string>)!;
 
     alpha.push("value3", "toBeRemoved", "value5");
     // remove toBeRemoved
@@ -110,7 +110,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = host.getMessages().get(clientToken)!;
     client.apply(changeMessages);
 
-    const alphaClient = client.findTrackedObject(SyncableArray<string>)!;
+    const alphaClient = client.findObjectOfType(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha.value, alphaClient.value);
   });
 
@@ -120,7 +120,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const creationMessages = host.getMessages().get(clientToken)!;
     client.apply(creationMessages);
 
-    const betaClient = client.findTrackedObject(Beta)!;
+    const betaClient = client.findObjectOfType(Beta)!;
     assert.notEqual(betaClient, null);
   });
 });

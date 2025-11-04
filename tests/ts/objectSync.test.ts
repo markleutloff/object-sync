@@ -32,7 +32,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     hBeta.value = 1;
     exchangeMessages();
 
-    const cBeta = objectSync1.client.findTrackedObject(Beta)!;
+    const cBeta = objectSync1.client.findObjectOfType(Beta)!;
     assert.strictEqual(cBeta.value, hBeta.value);
 
     hBeta.value = 2;

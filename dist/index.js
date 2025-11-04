@@ -255,7 +255,7 @@ var ObjectSyncClient = class {
     }
     return value;
   }
-  findTrackedObject(constructor, objectId) {
+  findObjectOfType(constructor, objectId) {
     for (const tracked of this._trackedObjectPool.all) {
       if (tracked instanceof constructor) {
         const metaInfo = getObjectSyncMetaInfo(tracked);
@@ -265,6 +265,15 @@ var ObjectSyncClient = class {
       }
     }
     return null;
+  }
+  findObjectsOfType(constructor) {
+    const results = [];
+    for (const tracked of this._trackedObjectPool.all) {
+      if (tracked instanceof constructor) {
+        return results.push(tracked);
+      }
+    }
+    return results;
   }
   get allTrackedObjects() {
     return Array.from(this._trackedObjectPool.all);
@@ -1441,6 +1450,7 @@ export {
   ObjectSyncClient,
   ObjectSyncHost,
   SyncableArray,
+  getHostObjectInfo,
   onCreated,
   onDeleted,
   onUpdateProperty,

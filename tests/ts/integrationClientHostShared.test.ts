@@ -29,7 +29,7 @@ describe("ObjectSyncHost/ObjectSyncClient client-host integration (shared classe
     // Client: apply all creation messages
     client.apply(creationMessages as any);
     // Find root object on client
-    const gammaClient = client.findTrackedObject(Gamma);
+    const gammaClient = client.findObjectOfType(Gamma);
     assert(gammaClient instanceof Gamma);
     assert(gammaClient.alpha instanceof Alpha);
     assert(gammaClient.alpha.beta instanceof Beta);

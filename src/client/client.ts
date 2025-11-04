@@ -9,7 +9,7 @@ type Constructor<T = any> = { new (...args: any[]): T };
 export type TrackableTargetGenerator<T extends object = any> = {
   getType(client: ObjectSyncClient, properties: ResolvablePropertyInfos<T>, objectId: unknown, typeId: string): Constructor;
   create(client: ObjectSyncClient, properties: ResolvablePropertyInfos<T>, objectId: unknown, typeId: string): T;
-}
+};
 
 export const defaultConstructorsByTypeId = new Map<string, Constructor>();
 export const defaultGeneratorsByTypeId = new Map<string, TrackableTargetGenerator>();
@@ -135,7 +135,7 @@ export class ObjectSyncClient {
     return value;
   }
 
-  findTrackedObject<T extends object>(constructor: Constructor<T>, objectId?: unknown) {
+  findObjectOfType<T extends object>(constructor: Constructor<T>, objectId?: unknown) {
     for (const tracked of this._trackedObjectPool.all) {
       if (tracked instanceof constructor) {
         const metaInfo = getObjectSyncMetaInfo(tracked)!;
@@ -144,6 +144,16 @@ export class ObjectSyncClient {
       }
     }
     return null;
+  }
+
+  findObjectsOfType<T extends object>(constructor: Constructor<T>) {
+    const results: T[] = [];
+    for (const tracked of this._trackedObjectPool.all) {
+      if (tracked instanceof constructor) {
+        return results.push(tracked as T);
+      }
+    }
+    return results;
   }
 
   get allTrackedObjects(): object[] {

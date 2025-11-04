@@ -32,8 +32,8 @@ describe("ObjectSyncClient integration", () => {
       { type: "create", objectId: 2, typeId: "Beta", properties: {} },
     ];
     client.apply(messages as any);
-    const foundAlpha = client.findTrackedObject(Alpha);
-    const foundBeta = client.findTrackedObject(Beta);
+    const foundAlpha = client.findObjectOfType(Alpha);
+    const foundBeta = client.findObjectOfType(Beta);
     assert(foundAlpha);
     assert(foundBeta);
   });
@@ -52,7 +52,7 @@ describe("ObjectSyncClient integration", () => {
       },
     ];
     client.apply(messages as any);
-    const foundAlpha = client.findTrackedObject(Alpha)!;
+    const foundAlpha = client.findObjectOfType(Alpha)!;
     assert(foundAlpha);
     assert.notEqual(foundAlpha.special, "should be ignored");
     assert.equal(foundAlpha.nonSpecial, "should be set");
@@ -65,7 +65,7 @@ describe("ObjectSyncClient integration", () => {
       { type: "create", objectId: 1, typeId: "Alpha", properties: { beta: { objectId: 2 } } },
     ];
     client.apply(messages as any);
-    const foundAlpha = client.findTrackedObject(Alpha);
+    const foundAlpha = client.findObjectOfType(Alpha);
     assert(foundAlpha);
     assert(foundAlpha.beta instanceof Beta);
   });
@@ -76,7 +76,7 @@ describe("ObjectSyncClient integration", () => {
       { type: "execute", objectId: 1, method: "what", parameters: [{ value: 42 }] },
     ];
     client.apply(messages as any);
-    const foundAlpha = client.findTrackedObject(Alpha);
+    const foundAlpha = client.findObjectOfType(Alpha);
     assert(foundAlpha);
     assert.strictEqual((foundAlpha as any)._lastWhat, 42);
   });

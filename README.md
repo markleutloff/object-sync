@@ -66,7 +66,7 @@ function exchangeMessages() {
 
 beta.value = 1;
 exchangeMessages();
-const clientBeta = clientSync.client.findTrackedObject(Beta)!;
+const clientBeta = clientSync.client.findObjectOfType(Beta)!;
 console.log(clientBeta.value); // 1
 
 beta.value = 2;
@@ -137,12 +137,90 @@ hostSync.host.track(beta, {
 });
 ```
 
+### SyncableArray Example
+
+```typescript
+import { SyncableArray, ObjectSync } from "simple-object-sync";
+
+// Create host and client sync instances
+const hostSync = new ObjectSync({});
+const clientSync = new ObjectSync({});
+
+// Create a SyncableArray and track it on the host
+const arr = new SyncableArray<number>([1, 2, 3]);
+const clientToken = hostSync.host.registerClient();
+hostSync.host.track(arr, { clientVisibility: { clients: clientToken } });
+
+// Exchange messages to sync initial state
+const creationMessages = hostSync.getMessages().get(clientToken)!;
+clientSync.client.apply(creationMessages);
+
+// Access the synced array on the client
+const clientArr = clientSync.client.findObjectOfType(SyncableArray)!;
+console.log(clientArr.value); // [1, 2, 3]
+
+// Make changes on the host
+arr.push(4, 5);
+arr.splice(1, 1); // Remove the second item
+
+// Sync changes to the client
+const changeMessages = hostSync.getMessages().get(clientToken)!;
+clientSync.client.apply(changeMessages);
+
+console.log(clientArr.value); // [1, 3, 4, 5]
+```
+
+The SyncableArray provides two methods which can be overridden to add EventEmitter features by subclassing it:
+
+```typescript
+protected onRemoved(start: number, items: T[]): void {
+}
+
+protected onAdded(start: number, items: T[]): void {
+}
+```
+
 ## API Overview
 
-- `ObjectSync`: Main class for host/client sync
-- `syncObject`, `syncProperty`, `syncMethod`: Decorators for marking objects/properties/methods
-- `ObjectSyncHost`, `ObjectSyncClient`: Direct host/client APIs
-- Message exchange: `getMessages()`, `applyMessages()`
+### Main Classes
+
+- `ObjectSync`: Unified host/client sync manager
+- `ObjectSyncHost`: Host-side API for tracking and synchronizing objects
+- `ObjectSyncClient`: Client-side API for applying changes and tracking objects
+- `SyncableArray`: Array-like object with syncable state and change tracking
+- `TrackedObjectPool`: Internal pool for managing tracked objects
+
+### Decorators
+
+- `@syncObject`: Marks a class as trackable and synchronizable
+- `@syncProperty`: Marks a property for synchronization
+- `@syncMethod`: Marks a method for remote execution
+
+### Types & Utilities
+
+- `ClientConnection`, `ClientConnectionSettings`: Represent client identity and configuration
+- `ClientFilter`, `ClientSpecificView`: Control visibility and customize sync for clients
+- `Message`, `CreateObjectMessage`, `ChangeObjectMessage`, `DeleteObjectMessage`, `ExecuteObjectMessage`: Message types for sync protocol
+- `PropertyInfo`, `PropertyInfos`: Property value and metadata for sync
+- `TrackSettings`, `ObjectSyncSettings`, `ObjectSyncHostSettings`, `ObjectSyncClientSettings`: Configuration types
+- `TrackableTargetGenerator`: Custom generator for advanced object creation
+
+### Key Methods
+
+- `getMessages()`: Retrieve all sync messages for clients
+- `applyMessages(messages)`: Apply received messages to update state
+- `track(object, settings?)`: Begin tracking an object on the host
+- `registerClient(settings?)`: Register a new client for sync
+- `findObjectOfType(Type, objectId?)`: Find a tracked object by type
+- `addView(object, view)`: Add a client-specific view for property customization
+
+### Advanced Concepts
+
+- **Designation**: Filter which clients receive or apply changes using roles
+- **Client-specific views**: Customize property values or visibility per client
+- **SyncableArray events**: Override `onAdded` and `onRemoved` for event-driven array changes
+
+See the source code and type definitions for more advanced usage and extension points.
 
 ## License
 
