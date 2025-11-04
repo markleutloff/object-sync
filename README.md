@@ -16,6 +16,7 @@ Tracks changes on objects and notifies clients. Synchronize object state between
 
 ```bash
 npm install simple-object-sync
+npm i --save-dev @types/simple-object-sync
 ```
 
 ## Basic Usage
@@ -23,7 +24,7 @@ npm install simple-object-sync
 ### 1. Define Trackable Objects
 
 ```typescript
-import { syncObject, syncProperty, syncMethod } from "object-sync";
+import { syncObject, syncProperty, syncMethod } from "simple-object-sync";
 
 @syncObject({ typeId: "Beta" })
 class Beta {
@@ -43,7 +44,7 @@ class Beta {
 ### 2. Create Host and Client
 
 ```typescript
-import { ObjectSync } from "object-sync";
+import { ObjectSync } from "simple-object-sync";
 
 const hostSync = new ObjectSync({});
 const clientSync = new ObjectSync({});
@@ -91,7 +92,7 @@ You can control which clients receive updates for tracked objects and properties
 ### Example: Only Allow Certain Clients to Receive Changes
 
 ```typescript
-import { getHostObjectInfo } from "object-sync";
+import { getHostObjectInfo } from "simple-object-sync";
 
 // Register clients with optional designation
 const clientA = hostSync.host.registerClient({ designation: "A" });
