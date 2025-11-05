@@ -1,3 +1,4 @@
+import { get } from "http";
 import { defaultConstructorsByTypeId, defaultGeneratorsByTypeId, TrackableTargetGenerator } from "../client/client.js";
 import "../shared/decorators.js";
 import { getHostObjectInfo, getObjectSyncMetaInfo } from "../shared/objectSyncMetaInfo.js";
@@ -128,16 +129,23 @@ export function syncObject<T extends object = any>(settings?: TrackableObjectSet
 }
 
 function ensureTrackableConstructorInfo(metadata: DecoratorMetadataObject): TrackableConstructorInfo {
-  let trackableInfo: TrackableConstructorInfo = metadata![TRACKABLE_CONSTRUCTOR_INFO] as TrackableConstructorInfo;
-  if (!trackableInfo) {
-    trackableInfo = {
-      trackedProperties: new Map<string, TrackedPropertySettings>(),
-      trackedMethods: new Map<string, TrackedPropertySettings>(),
-      isAutoTrackable: false,
-    };
-    metadata![TRACKABLE_CONSTRUCTOR_INFO] = trackableInfo;
-  }
-  return trackableInfo;
+  const oldTrackableInfo = (metadata[TRACKABLE_CONSTRUCTOR_INFO] ?? {
+    trackedProperties: new Map<string, TrackedPropertySettings>(),
+    trackedMethods: new Map<string, TrackedPropertySettings>(),
+    isAutoTrackable: false,
+  }) as TrackableConstructorInfo;
+
+  const newTrackableInfo: TrackableConstructorInfo = {
+    trackedProperties: new Map<string, TrackedPropertySettings>(oldTrackableInfo.trackedProperties),
+    trackedMethods: new Map<string, TrackedPropertySettings>(oldTrackableInfo.trackedMethods),
+    isAutoTrackable: oldTrackableInfo.isAutoTrackable,
+    designations: oldTrackableInfo.designations,
+    typeId: oldTrackableInfo.typeId,
+  };
+
+  metadata![TRACKABLE_CONSTRUCTOR_INFO] = newTrackableInfo;
+
+  return newTrackableInfo;
 }
 
 export function checkCanUseProperty(constructor: Constructor, propertyKey: string, designation: string | undefined) {

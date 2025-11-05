@@ -511,16 +511,20 @@ function syncObject(settings) {
   };
 }
 function ensureTrackableConstructorInfo(metadata) {
-  let trackableInfo = metadata[TRACKABLE_CONSTRUCTOR_INFO];
-  if (!trackableInfo) {
-    trackableInfo = {
-      trackedProperties: /* @__PURE__ */ new Map(),
-      trackedMethods: /* @__PURE__ */ new Map(),
-      isAutoTrackable: false
-    };
-    metadata[TRACKABLE_CONSTRUCTOR_INFO] = trackableInfo;
-  }
-  return trackableInfo;
+  const oldTrackableInfo = metadata[TRACKABLE_CONSTRUCTOR_INFO] ?? {
+    trackedProperties: /* @__PURE__ */ new Map(),
+    trackedMethods: /* @__PURE__ */ new Map(),
+    isAutoTrackable: false
+  };
+  const newTrackableInfo = {
+    trackedProperties: new Map(oldTrackableInfo.trackedProperties),
+    trackedMethods: new Map(oldTrackableInfo.trackedMethods),
+    isAutoTrackable: oldTrackableInfo.isAutoTrackable,
+    designations: oldTrackableInfo.designations,
+    typeId: oldTrackableInfo.typeId
+  };
+  metadata[TRACKABLE_CONSTRUCTOR_INFO] = newTrackableInfo;
+  return newTrackableInfo;
 }
 function checkCanUseProperty(constructor, propertyKey, designation) {
   const constructorInfo = getTrackableTypeInfo(constructor);
@@ -812,6 +816,140 @@ var SyncableArray = (() => {
     __runInitializers(_classThis, _classExtraInitializers);
   })(), _a);
   return SyncableArray2 = _classThis;
+})();
+
+// build/shared/eventEmitter.js
+var EventEmitter = class {
+  constructor() {
+    __publicField(this, "_events", {});
+  }
+  on(event, callback) {
+    if (!this._events[event])
+      this._events[event] = [callback];
+    else
+      this._events[event].push(callback);
+    this.onEventListenerAdded(event, callback);
+  }
+  once(event, callback) {
+    const onceCallback = ((...args) => {
+      this.off(event, onceCallback);
+      callback(...args);
+    });
+    this.on(event, onceCallback);
+  }
+  off(event, callback) {
+    if (!this._events[event])
+      return;
+    this._events[event] = this._events[event].filter((cb) => cb !== callback);
+    this.onEventListenerRemoved(event, callback);
+  }
+  listenerCount(event, callback) {
+    if (!this._events[event])
+      return 0;
+    if (!callback)
+      return this._events[event].length;
+    return this._events[event].filter((cb) => cb === callback).length;
+  }
+  emit(event, ...args) {
+    if (!this._events[event])
+      return;
+    for (const callback of this._events[event]) {
+      callback(...args);
+    }
+  }
+  // protected emit2<Event extends keyof Events>(event: Event, ...args: Parameters<Events[Event]>): void {
+  //   if (!this._events[event as string]) return;
+  //   for (const callback of this._events[event as string]) {
+  //     callback(...args);
+  //   }
+  // }
+  onEventListenerAdded(event, callback) {
+  }
+  onEventListenerRemoved(event, callback) {
+  }
+};
+
+// build/shared/syncableObservableArray.js
+var __esDecorate2 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+  function accept(f) {
+    if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
+    return f;
+  }
+  var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+  var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+  var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+  var _, done = false;
+  for (var i = decorators.length - 1; i >= 0; i--) {
+    var context = {};
+    for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
+    for (var p in contextIn.access) context.access[p] = contextIn.access[p];
+    context.addInitializer = function(f) {
+      if (done) throw new TypeError("Cannot add initializers after decoration has completed");
+      extraInitializers.push(accept(f || null));
+    };
+    var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+    if (kind === "accessor") {
+      if (result === void 0) continue;
+      if (result === null || typeof result !== "object") throw new TypeError("Object expected");
+      if (_ = accept(result.get)) descriptor.get = _;
+      if (_ = accept(result.set)) descriptor.set = _;
+      if (_ = accept(result.init)) initializers.unshift(_);
+    } else if (_ = accept(result)) {
+      if (kind === "field") initializers.unshift(_);
+      else descriptor[key] = _;
+    }
+  }
+  if (target) Object.defineProperty(target, contextIn.name, descriptor);
+  done = true;
+};
+var __runInitializers2 = function(thisArg, initializers, value) {
+  var useValue = arguments.length > 2;
+  for (var i = 0; i < initializers.length; i++) {
+    value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+  }
+  return useValue ? value : void 0;
+};
+var SyncableObservableArray = (() => {
+  var _a;
+  let _classDecorators = [syncObject({
+    typeId: "SyncableObservableArray"
+  })];
+  let _classDescriptor;
+  let _classExtraInitializers = [];
+  let _classThis;
+  let _classSuper = SyncableArray;
+  var SyncableObservableArray2 = (_a = class extends _classSuper {
+    constructor(initial = []) {
+      super();
+      __publicField(this, "_eventEmitter", new EventEmitter());
+      this.push(...initial);
+    }
+    onRemoved(start, items) {
+      this._eventEmitter.emit("removed", items, start);
+    }
+    onAdded(start, items) {
+      this._eventEmitter.emit("added", items, start);
+    }
+    on(event, callback) {
+      this._eventEmitter.on(event, callback);
+    }
+    once(event, callback) {
+      this._eventEmitter.once(event, callback);
+    }
+    off(event, callback) {
+      this._eventEmitter.off(event, callback);
+    }
+    listenerCount(event, callback) {
+      return this._eventEmitter.listenerCount(event, callback);
+    }
+  }, _classThis = _a, (() => {
+    const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
+    __esDecorate2(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+    SyncableObservableArray2 = _classThis = _classDescriptor.value;
+    if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+    __runInitializers2(_classThis, _classExtraInitializers);
+  })(), _a);
+  return SyncableObservableArray2 = _classThis;
 })();
 
 // build/host/hostObjectInfo.js
@@ -1549,6 +1687,41 @@ var ObjectSync = class {
     }
     return resultsByClient;
   }
+  async exchangeMessagesAsync(sendToClientAsync, errorHandler) {
+    const messages = this.getMessages();
+    const resultsByClient = /* @__PURE__ */ new Map();
+    const allPromises = [];
+    for (const [clientToken, clientMessages] of messages) {
+      const methodInvokeResults = sendToClientAsync(clientToken, clientMessages);
+      allPromises.push(methodInvokeResults);
+      resultsByClient.set(clientToken, methodInvokeResults);
+    }
+    await Promise.allSettled(allPromises);
+    for (const [clientToken, resultsPromise] of resultsByClient) {
+      try {
+        const results = await resultsPromise;
+        this._host.applyClientMethodInvokeResults(clientToken, results);
+      } catch (error) {
+        if (errorHandler) {
+          errorHandler(clientToken, error);
+        }
+      }
+    }
+  }
+  async exchangeMessagesBulkAsync(sendToClientsAsync, errorHandler) {
+    const messages = this.getMessages();
+    const resultsByClient = await sendToClientsAsync(messages);
+    for (const [clientToken, resultsPromise] of resultsByClient) {
+      try {
+        const results = await resultsPromise;
+        this._host.applyClientMethodInvokeResults(clientToken, results);
+      } catch (error) {
+        if (errorHandler) {
+          errorHandler(clientToken, error);
+        }
+      }
+    }
+  }
 };
 
 // build/client/clientObjectInfo.js
@@ -1565,6 +1738,7 @@ export {
   ObjectSyncClient,
   ObjectSyncHost,
   SyncableArray,
+  SyncableObservableArray,
   TrackedObjectPool,
   checkCanUseConstructor,
   checkCanUseMethod,

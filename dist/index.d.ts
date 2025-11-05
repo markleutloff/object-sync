@@ -469,6 +469,30 @@ export declare class SyncableArray<T> implements ITrackableOnUpdateProperty<any>
 	protected onRemoved(start: number, items: T[]): void;
 	protected onAdded(start: number, items: T[]): void;
 }
+export type EventFunction = (...args: any[]) => void;
+export type EventMap = {
+	[key: string]: EventFunction;
+};
+export type IEventEmitter<Events extends EventMap = EventMap> = {
+	on<Event extends keyof Events>(event: Event, callback: Events[Event]): void;
+	once<Event extends keyof Events>(event: Event, callback: Events[Event]): void;
+	off<Event extends keyof Events>(event: Event, callback: Events[Event]): void;
+	listenerCount<Event extends keyof Events>(event: Event, callback?: Events[Event] | undefined): number;
+};
+export type SyncableObservableArrayEventMap = {
+	added: (items: any[], start: number) => void;
+	removed: (items: any[], start: number) => void;
+};
+export declare class SyncableObservableArray<T> extends SyncableArray<T> implements IEventEmitter<SyncableObservableArrayEventMap> {
+	private readonly _eventEmitter;
+	constructor(initial?: T[]);
+	protected onRemoved(start: number, items: T[]): void;
+	protected onAdded(start: number, items: T[]): void;
+	on<Event extends keyof SyncableObservableArrayEventMap>(event: Event, callback: SyncableObservableArrayEventMap[Event]): void;
+	once<Event extends keyof SyncableObservableArrayEventMap>(event: Event, callback: SyncableObservableArrayEventMap[Event]): void;
+	off<Event extends keyof SyncableObservableArrayEventMap>(event: Event, callback: SyncableObservableArrayEventMap[Event]): void;
+	listenerCount<Event extends keyof SyncableObservableArrayEventMap>(event: Event, callback?: SyncableObservableArrayEventMap[Event] | undefined): number;
+}
 export type ObjectSyncSettings = {
 	objectIdPrefix?: string;
 	designation?: string;
@@ -483,6 +507,8 @@ export declare class ObjectSync {
 	getMessages(): Map<ClientConnection, Message[]>;
 	applyClientMethodInvokeResults(resultsByClient: Map<ClientConnection, MethodExecuteResult[]>): void;
 	applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<Map<ClientConnection, MethodExecuteResult[]>>;
+	exchangeMessagesAsync(sendToClientAsync: (client: ClientConnection, messages: Message[]) => Promise<MethodExecuteResult[]>, errorHandler?: (client: ClientConnection, error: any) => void): Promise<void>;
+	exchangeMessagesBulkAsync(sendToClientsAsync: (messagesByClient: Map<ClientConnection, Message[]>) => Promise<Map<ClientConnection, MethodExecuteResult[]>>, errorHandler?: (client: ClientConnection, error: any) => void): Promise<void>;
 }
 type Constructor$1<T = any> = {
 	new (...args: any[]): T;

@@ -1,6 +1,6 @@
 {
   "name": "simple-object-sync",
-  "version": "1.0.11",
+  "version": "1.0.14",
   "type": "module",
   "repository": {
     "url": "https://github.com/markleutloff/object-sync"
@@ -27,6 +27,7 @@
     "build:bundle:dts": "dts-bundle-generator -o dist/index.d.ts src/index.ts",
     "build": "npm run build:tsc && npm run build:bundle && npm run build:bundle:dts",
     "test:ts": "tsx --test tests/ts/*.test.ts",
+    "test:ts:syncableObservableArray": "tsx --test tests/ts/syncableObservableArray.test.ts",
     "test:bundle": "tsx --test tests/bundle/*.test.ts",
     "test": "npm run test:ts && npm run test:bundle",
     "build-and-test": "npm run build && npm run test"

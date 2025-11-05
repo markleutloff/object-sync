@@ -56,4 +56,51 @@ export class ObjectSync {
     }
     return resultsByClient;
   }
+
+  async exchangeMessagesAsync(
+    sendToClientAsync: (client: ClientConnection, messages: Message[]) => Promise<MethodExecuteResult[]>,
+    errorHandler?: (client: ClientConnection, error: any) => void
+  ): Promise<void> {
+    const messages = this.getMessages();
+    const resultsByClient = new Map<ClientConnection, Promise<MethodExecuteResult[]>>();
+    const allPromises: Promise<MethodExecuteResult[]>[] = [];
+
+    for (const [clientToken, clientMessages] of messages) {
+      const methodInvokeResults = sendToClientAsync(clientToken, clientMessages);
+      allPromises.push(methodInvokeResults);
+      resultsByClient.set(clientToken, methodInvokeResults);
+    }
+
+    await Promise.allSettled(allPromises);
+
+    for (const [clientToken, resultsPromise] of resultsByClient) {
+      try {
+        const results = await resultsPromise;
+        this._host.applyClientMethodInvokeResults(clientToken, results);
+      } catch (error) {
+        if (errorHandler) {
+          errorHandler(clientToken, error);
+        }
+      }
+    }
+  }
+
+  async exchangeMessagesBulkAsync(
+    sendToClientsAsync: (messagesByClient: Map<ClientConnection, Message[]>) => Promise<Map<ClientConnection, MethodExecuteResult[]>>,
+    errorHandler?: (client: ClientConnection, error: any) => void
+  ): Promise<void> {
+    const messages = this.getMessages();
+    const resultsByClient = await sendToClientsAsync(messages);
+
+    for (const [clientToken, resultsPromise] of resultsByClient) {
+      try {
+        const results = await resultsPromise;
+        this._host.applyClientMethodInvokeResults(clientToken, results);
+      } catch (error) {
+        if (errorHandler) {
+          errorHandler(clientToken, error);
+        }
+      }
+    }
+  }
 }

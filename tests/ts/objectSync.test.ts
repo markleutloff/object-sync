@@ -68,11 +68,13 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 });
 
 async function exchangeMessagesAsync(objectSync0: ObjectSync, objectSync1: ObjectSync): Promise<void> {
-  const h2cMessages = objectSync0.getMessages();
-  const methodInvokeResults0 = await objectSync1.applyMessagesAsync(h2cMessages);
-  objectSync0.applyClientMethodInvokeResults(methodInvokeResults0);
+  await objectSync0.exchangeMessagesBulkAsync((messagesByClient) => {
+    return objectSync1.applyMessagesAsync(messagesByClient);
+  });
 
-  const c2hMessages = objectSync1.getMessages();
-  const methodInvokeResults1 = await objectSync0.applyMessagesAsync(c2hMessages);
-  objectSync1.applyClientMethodInvokeResults(methodInvokeResults1);
+  await objectSync1.exchangeMessagesBulkAsync((messagesByClient) => {
+    return objectSync0.applyMessagesAsync(messagesByClient);
+  });
 }
+
+

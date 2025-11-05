@@ -57,14 +57,14 @@ hostSync.host.track(beta);
 ### 3. Synchronize State
 
 ```typescript
-async function exchangeMessagesAsync() {
-  const h2cMessages = hostSync.getMessages();
-  const methodInvokeResults0 = await clientSync.applyMessagesAsync(h2cMessages);
-  hostSync.applyClientMethodInvokeResults(methodInvokeResults0);
+async function exchangeMessagesAsync(): Promise<void> {
+  await hostSync.exchangeMessagesBulkAsync((messagesByClient) => {
+    return clientSync.applyMessagesAsync(messagesByClient);
+  });
 
-  const c2hMessages = clientSync.getMessages();
-  const methodInvokeResults1 = await hostSync.applyMessagesAsync(c2hMessages);
-  clientSync.applyClientMethodInvokeResults(methodInvokeResults1);
+  await clientSync.exchangeMessagesBulkAsync((messagesByClient) => {
+    return hostSync.applyMessagesAsync(messagesByClient);
+  });
 }
 
 beta.value = 1;
@@ -224,6 +224,25 @@ protected onAdded(start: number, items: T[]): void {
 }
 ```
 
+An implementation which does this also exist:
+
+```typescript
+import { SyncableObservableArray, ObjectSync } from "simple-object-sync";
+
+const arr = new SyncableObservableArray<number>([1, 2, 3]);
+
+arr.on("removed", (items, start) => {
+   ...
+});
+
+arr.on("added", (items, start) => {
+   ...
+});
+
+arr.splice(1, 1);
+arr.push("value3", "value4");
+```
+
 ## API Overview
 
 ### Main Classes
@@ -232,6 +251,7 @@ protected onAdded(start: number, items: T[]): void {
 - `ObjectSyncHost`: Host-side API for tracking and synchronizing objects
 - `ObjectSyncClient`: Client-side API for applying changes and tracking objects
 - `SyncableArray`: Array-like object with syncable state and change tracking
+- `SyncableObservableArray`: Array-like object with syncable state and change tracking will also emit events
 - `TrackedObjectPool`: Internal pool for managing tracked objects
 
 ### Decorators
