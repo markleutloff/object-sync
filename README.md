@@ -1,16 +1,43 @@
 # object-sync
 
-Tracks changes on objects and notifies clients. Synchronize object state between host and client environments with fine-grained control over properties and methods.
+Synchronize object state between host and client environments with fine-grained control over properties and methods. Supports multi-client scenarios and advanced array/object synchronization.
 
-**Note:** This library does not handle the communication layer (such as transferring messages over ports, sockets, or other transport mechanisms). You are responsible for sending and receiving messages between host and client using your preferred method.
+**Note:** This library does not handle the connection or communication layer (such as transferring messages over ports, sockets, or other transport mechanisms). You are responsible for implementing the connection layer and for sending/receiving messages between host and client using your preferred method.
 
-## Features
+**Security Note:**
+To prevent malicious or invalid data from being transferred, you must verify and validate all incoming and outgoing data yourself. Use the hooks provided by decorator functions (such as `canApply`, `canTrack`, `beforeSendToClient`, and `beforeExecuteOnClient`) to implement custom validation, filtering, and access control logic for your application.
 
-- Track changes to objects and properties
-- Synchronize state between host and client
-- Decorator-based API for marking trackable objects and properties
-- Message-based communication for updates
-- TypeScript support
+An `ObjectSync` instance will only create or instantiate types registered in its `typeGenerators` list. By default, all known types marked with `@syncObject` are allowed unless you restrict the configuration. This is not a strict security measure—if you need to limit which types can be synchronized and instantiated, you must explicitly control the contents of `typeGenerators`.
+
+## Key API Features
+
+- **Track changes to objects and properties:**
+  Use decorators to mark properties and methods for tracking. Changes are automatically detected and can be synchronized to clients.
+
+- **Synchronize state between host and multiple clients:**
+  Register multiple clients with the host. State changes are propagated to all connected clients.
+
+- **Decorator-based API:**
+
+  - `@syncObject`: Marks a class as trackable and synchronizable.
+  - `@syncProperty`: Marks a property for change tracking and synchronization.
+  - `@syncMethod`: Marks a method for remote invocation and synchronization. Supports hooks for argument manipulation and permission checks.
+
+- **Message-based communication:**
+  The library generates messages for state changes and method calls. You must implement the transport layer to send/receive these messages between host and clients.
+
+- **Array and observable array synchronization:**
+
+  - `SyncableArray`: Synchronizes array values and mutations (push, splice, etc.) between host and client.
+  - `SyncableObservableArray`: Extends `SyncableArray` with event support (`on`, `off`) for reacting to changes such as items being added or removed.
+
+- **TypeScript support:**
+  All APIs are fully typed for safe and predictable usage in TypeScript projects.
+
+  **Custom Serializable Types:**
+  You can create custom serializable types and register serializers/deserializers for them. These types will not be tracked by the system, but can be serialized and deserialized for transfer between host and client. This is useful for handling data structures or classes that do not require change tracking but need to be sent across the connection. See `SerializableClass` and its serializer in `objectSync.test.ts` for an example.
+
+  Serializers/deserializers can be implemented in different ways, such as providing a `serialize` function to convert an object to plain data, and a `deserialize` function to reconstruct the object from data. Register your custom serializers in the `typeSerializers` option when creating an ObjectSync instance.
 
 ## Installation
 
@@ -18,273 +45,166 @@ Tracks changes on objects and notifies clients. Synchronize object state between
 npm install simple-object-sync
 ```
 
-## Basic Usage
+## Usage Examples
 
-### 1. Define Trackable Objects
+### 1. Trackable Objects and Methods
 
 ```typescript
 import { syncObject, syncProperty, syncMethod } from "simple-object-sync";
 
-@syncObject({ typeId: "Beta" })
-class Beta {
-  constructor(value: number = 0) {
-    this.value = value;
-  }
-  @syncProperty() accessor value: number;
+// Mark the class as trackable and synchronizable
+@syncObject()
+class Root {
+  // Track changes to this property and sync to clients
+  @syncProperty() accessor value: number = 0;
 
-  // Example of a method synchronized across clients
-  @syncMethod()
-  increment() {
-    this.value++;
+  // Allow remote invocation of this method from clients
+  @syncMethod({
+    promiseHandlingType: "await", // Await the result before responding
+    beforeExecuteOnClient(object, methodName, args, clientConnection) {
+      // Example: modify arguments before execution on client
+      args[0] = args[0] + clientConnection.identity;
+      return true; // Allow execution
+    },
+  })
+  invoke(returnValue: string) {
+    return returnValue;
   }
 }
 ```
 
-### 2. Create Host and Client
+### 2. Host and Multi-Client Setup
 
 ```typescript
 import { ObjectSync } from "simple-object-sync";
 
-const hostSync = new ObjectSync({});
-const clientSync = new ObjectSync({});
+// Create the host instance and register trackable types
+const hostSync = new ObjectSync({
+  identity: "host", // Unique identity for the host
+  typeGenerators: [Root], // List of trackable types
+});
 
-const beta = new Beta(0);
-const hostClientToken = hostSync.host.registerClient();
-const clientClientToken = clientSync.host.registerClient();
-hostSync.host.track(beta);
+// Register multiple clients with unique identities
+const clients = [];
+for (let i = 0; i < 3; i++) {
+  const clientToken = hostSync.tracker.registerClient({ identity: "client" + i });
+  clients.push(clientToken);
+}
+// Each client will receive synchronized state and updates
 ```
 
-### 3. Synchronize State
+### 3. Array Synchronization
+
+hostSync.tracker.track(alpha);
+
+Synchronize changes to arrays and observable arrays between host and client.
 
 ```typescript
-async function exchangeMessagesAsync(): Promise<void> {
-  await hostSync.exchangeMessagesBulkAsync((messagesByClient) => {
-    return clientSync.applyMessagesAsync(messagesByClient);
-  });
+import { SyncableArray, SyncableObservableArray } from "simple-object-sync";
 
-  await clientSync.exchangeMessagesBulkAsync((messagesByClient) => {
-    return hostSync.applyMessagesAsync(messagesByClient);
-  });
+// Host: Track a SyncableArray instance
+const alpha = new SyncableArray<string>(["init1", "init2"]);
+hostSync.tracker.track(alpha);
+
+// Client: Find the synchronized array instance
+const alphaClient = clientSync.applicator.findObjectOfType(SyncableArray<string>)!;
+assert.deepStrictEqual(alpha.value, alphaClient.value); // Values are kept in sync
+
+// For event-driven array changes, use SyncableObservableArray
+const observableAlphaClient = clientSync.applicator.findObjectOfType(SyncableObservableArray<string>)!;
+// Listen for items being added
+observableAlphaClient.on("added", (items, start) => {
+  // handle added items
+});
+// Listen for items being removed
+observableAlphaClient.on("removed", (items, start) => {
+  // handle removed items
+});
+// You can also use 'off' to remove event listeners
+```
+
+### 4. Advanced Object Synchronization
+
+- **Sync serializable types:**
+  Use custom serializers to synchronize complex objects and classes.
+- **Control property/method sync with decorators:**
+  Use hooks like `beforeSendToClient`, `canApply`, and `beforeExecuteOnClient` for fine-grained control over what gets synchronized and when.
+- **Multi-client message exchange:**
+  Efficiently propagate changes and method calls to all registered clients.
+
+See `tests/ts/objectSync.test.ts`, `tests/ts/syncableArray.test.ts`, `tests/ts/syncableObservableArray.test.ts`, and `tests/ts/multiClient.test.ts` for more advanced scenarios and real-world patterns.
+
+### 5. Mock Communication Layer Example (using worker threads)
+
+Below is a mock implementation of a communication layer using worker threads, inspired by the `worker.test.ts` and `worker.ts` files. This demonstrates how the host and client can exchange messages using a simple transport abstraction.
+
+#### Host Side (spawns workers and exchanges messages)
+
+```typescript
+import { Worker } from "node:worker_threads";
+import { ObjectSync } from "simple-object-sync";
+
+function createWorker(hostSync, id) {
+  const worker = new Worker("./worker.js");
+  const clientToken = hostSync.tracker.registerClient({ identity: "client" + id });
+  return {
+    clientToken,
+    terminate() {
+      worker.terminate();
+    },
+    requestAsync(type, data) {
+      return new Promise((resolve) => {
+        worker.once("message", resolve);
+        worker.postMessage({ type, data });
+      });
+    },
+  };
 }
 
-beta.value = 1;
-await exchangeMessagesAsync();
-const clientBeta = clientSync.client.findObjectOfType(Beta)!;
-console.log(clientBeta.value); // 1
-
-beta.value = 2;
-await exchangeMessagesAsync();
-console.log(clientBeta.value); // 2
+async function exchangeMessagesAsync(hostSync, clients) {
+  const messagesFromClients = new Map();
+  await hostSync.exchangeMessagesAsync(async (clientToken, messages) => {
+    const client = clients.find((c) => c.clientToken === clientToken);
+    const result = await client.requestAsync("messages", messages);
+    messagesFromClients.set(clientToken, result.messages);
+    return result.methodResponses;
+  });
+  await hostSync.applyMessagesAsync(messagesFromClients);
+}
 ```
 
-### 4. Synchronize Methods
-
-When you decorate a method with `@syncMethod()`, calling this method on the host will schedule its execution on all clients. The method will be executed after all other property changes have been applied on any client, ensuring state consistency before method logic runs.
-
-All methods called as such will be awaited for their return value (as in when a method returns a promise the application of changes will wait until those promise has been resolved or rejected).
+#### Client Side (worker.js)
 
 ```typescript
-beta.increment(); // Host increments value
-await exchangeMessagesAsync();
-console.log(clientBeta.value); // 3 (method executed after sync)
-```
+import { parentPort } from "worker_threads";
+import { ObjectSync } from "simple-object-sync";
 
-It is also possible to let the method return a accumulation of host and client results.
+const clientSync = new ObjectSync({ identity: "client", typeGenerators: [Root] });
+const clientTokenFromHost = clientSync.tracker.registerClient({ identity: "host" });
 
-```typescript
-import { syncObject, syncMethod, MethodCallResult } from "simple-object-sync";
-
-@syncObject({ typeId: "Beta" })
-class Beta {
-  @syncMethod()
-  callFunctionOnClients(value: number): number {
-     return value;
+parentPort.on("message", async (message) => {
+  if (message.type === "messages") {
+    const messagesByClient = new Map();
+    messagesByClient.set(clientTokenFromHost, message.data);
+    const methodResponses = (await clientSync.applyMessagesAsync(messagesByClient)).get(clientTokenFromHost);
+    const messages = clientSync.getMessages();
+    parentPort.postMessage({
+      methodResponses,
+      messages: messages.get(clientTokenFromHost),
+    });
   }
-}
-
-const beta = new Beta();
-...
-const hostResult = beta.callFunctionOnClients(42);
-const clientResults = getHostObjectInfo(beta)!.getInvokeResults("callFunctionOnClients")!;
-// You can leave the method name to get the untyped result of the last invoke call:
-//    const methodCallResult = getHostObjectInfo(beta)!.getInvokeResults()!;
-// This can also be combined into a single call, which supports full type support for the arguments:
-//    const { clientResults, hostResult } = getHostObjectInfo(hBeta)!.invoke("invoke", 4);
-
-console.log(`The hosts method returned: ${hostResult}`)
-
-// clientResults is a promise because we do not know the clients until we send the messages to them
-clientResults.then(async (clientAndResult) => {
-   for (const [client, promise] of clientAndResult) {
-      // Individual results may be a resolved value or a rejection.
-      try {
-         const value = await promise;
-         console.log(`Method call on client ${client} returned: ${value}`);
-      }
-      catch (error)  {
-         console.error(`Method call on client ${client} returned an error: ${value}`);
-      }
-   }
 });
 ```
 
-## Restricting Changes to Specific Clients
+This example abstracts the transport using worker threads, but you can adapt the pattern to any communication layer (e.g., sockets, web workers, etc.). The host sends messages to each client, and the client applies them and responds with any updates or method results.
 
-You can control which clients receive updates for tracked objects and properties using client-specific views and filters.
+## Testing
 
-### Example: Only Allow Certain Clients to Receive Changes
+Run all tests:
 
-```typescript
-import { getHostObjectInfo } from "simple-object-sync";
-
-// Register clients with optional designation
-const clientA = hostSync.host.registerClient({ designation: "A" });
-const clientB = hostSync.host.registerClient({ designation: "B" });
-
-// Track an object and restrict visibility to clientA only
-hostSync.host.track(beta, {
-  clientVisibility: { clients: clientA, isExclusive: true },
-});
-
-// Add a client-specific view to further customize property values for a client
-getHostObjectInfo(beta)?.addView({
-  filter: { clients: new Set([clientA]), isExclusive: true },
-  onProperty(client, key, propertyInfo) {
-    if (key === "value") return { value: 999 };
-    return propertyInfo;
-  },
-});
+```bash
+npm test
 ```
-
-## Designation Usage
-
-When creating `ObjectSync` instances or registering clients, you can specify a `designation` value:
-
-- `designation` is a string that identifies the role or type of a client or host (e.g., "host", "clientA", "clientB").
-- This value is used in message transfer and application to filter which clients should receive or applyAsync certain changes.
-- You can use designations in `ClientFilter` to include or exclude clients by their designation.
-- syncObject, syncProperty and synncMethod decorators can receive the designations property too, which also acts as an filter.
-
-### Example: Using Designation
-
-```typescript
-const hostSync = new ObjectSync({ designation: "host" });
-const clientSyncA = new ObjectSync({ designation: "clientA" });
-const clientSyncB = new ObjectSync({ designation: "clientB" });
-
-const clientA = hostSync.host.registerClient({ designation: "clientA" });
-const clientB = hostSync.host.registerClient({ designation: "clientB" });
-
-// Use designation in clientVisibility filter
-hostSync.host.track(beta, {
-  clientVisibility: { designations: "clientA", isExclusive: true },
-});
-```
-
-### SyncableArray Example
-
-```typescript
-import { SyncableArray, ObjectSync } from "simple-object-sync";
-
-// Create host and client sync instances
-const hostSync = new ObjectSync({});
-const clientSync = new ObjectSync({});
-
-// Create a SyncableArray and track it on the host
-const arr = new SyncableArray<number>([1, 2, 3]);
-const clientToken = hostSync.host.registerClient();
-hostSync.host.track(arr, { clientVisibility: { clients: clientToken } });
-
-// Exchange messages to sync initial state
-const creationMessages = hostSync.getMessages().get(clientToken)!;
-await clientSync.client.applyAsync(creationMessages);
-
-// Access the synced array on the client
-const clientArr = clientSync.client.findObjectOfType(SyncableArray)!;
-console.log(clientArr.value); // [1, 2, 3]
-
-// Make changes on the host
-arr.push(4, 5);
-arr.splice(1, 1); // Remove the second item
-
-// Sync changes to the client
-const changeMessages = hostSync.getMessages().get(clientToken)!;
-await clientSync.client.applyAsync(changeMessages);
-
-console.log(clientArr.value); // [1, 3, 4, 5]
-```
-
-The SyncableArray provides two methods which can be overridden to add EventEmitter features by subclassing it:
-
-```typescript
-protected onRemoved(start: number, items: T[]): void {
-}
-
-protected onAdded(start: number, items: T[]): void {
-}
-```
-
-An implementation which does this also exist:
-
-```typescript
-import { SyncableObservableArray, ObjectSync } from "simple-object-sync";
-
-const arr = new SyncableObservableArray<number>([1, 2, 3]);
-
-arr.on("removed", (items, start) => {
-   ...
-});
-
-arr.on("added", (items, start) => {
-   ...
-});
-
-arr.splice(1, 1);
-arr.push("value3", "value4");
-```
-
-## API Overview
-
-### Main Classes
-
-- `ObjectSync`: Unified host/client sync manager
-- `ObjectSyncHost`: Host-side API for tracking and synchronizing objects
-- `ObjectSyncClient`: Client-side API for applying changes and tracking objects
-- `SyncableArray`: Array-like object with syncable state and change tracking
-- `SyncableObservableArray`: Array-like object with syncable state and change tracking will also emit events
-- `TrackedObjectPool`: Internal pool for managing tracked objects
-
-### Decorators
-
-- `@syncObject`: Marks a class as trackable and synchronizable
-- `@syncProperty`: Marks a property for synchronization
-- `@syncMethod`: Marks a method for remote execution
-
-### Types & Utilities
-
-- `ClientConnection`, `ClientConnectionSettings`: Represent client identity and configuration
-- `ClientFilter`, `ClientSpecificView`: Control visibility and customize sync for clients
-- `Message`, `CreateObjectMessage`, `ChangeObjectMessage`, `DeleteObjectMessage`, `ExecuteObjectMessage`: Message types for sync protocol
-- `PropertyInfo`, `PropertyInfos`: Property value and metadata for sync
-- `TrackSettings`, `ObjectSyncSettings`, `ObjectSyncHostSettings`, `ObjectSyncClientSettings`: Configuration types
-- `TrackableTargetGenerator`: Custom generator for advanced object creation
-
-### Key Methods
-
-- `getMessages()`: Retrieve all sync messages for clients
-- `applyMessages(messages)`: Apply received messages to update state
-- `track(object, settings?)`: Begin tracking an object on the host
-- `registerClient(settings?)`: Register a new client for sync
-- `findObjectOfType(Type, objectId?)`: Find a tracked object by type
-- `addView(object, view)`: Add a client-specific view for property customization
-
-### Advanced Concepts
-
-- **Designation**: Filter which clients receive or applyAsync changes using roles
-- **Client-specific views**: Customize property values or visibility per client
-- **SyncableArray events**: Override `onAdded` and `onRemoved` for event-driven array changes
-
-See the source code and type definitions for more advanced usage and extension points.
 
 ## License
 

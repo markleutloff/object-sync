@@ -1,3 +1,9 @@
 build/*
+tests/**/*.js
+tests/**/*.js.map
+tests/**/*.d.ts
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
 node_modules/*
 package-lock.json

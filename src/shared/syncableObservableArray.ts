@@ -1,4 +1,4 @@
-import { syncObject } from "../host/decorators.js";
+import { syncObject } from "../tracker/decorators.js";
 import { SyncableArray } from "./syncableArray.js";
 import { IEventEmitter, EventEmitter } from "./eventEmitter.js";
 

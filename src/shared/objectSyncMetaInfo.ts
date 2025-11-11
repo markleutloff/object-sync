@@ -1,5 +1,6 @@
-import { ClientObjectInfo } from "../client/clientObjectInfo.js";
-import { HostObjectInfo } from "../host/hostObjectInfo.js";
+import type { ApplicatorObjectInfo } from "../applicator/applicatorObjectInfo.js";
+import type { ChangeTrackerObjectInfo } from "../tracker/trackerObjectInfo.js";
+import { getTrackableTypeInfo } from "../tracker/decorators.js";
 
 export const objectSyncSymbol = Symbol("objectSync");
 
@@ -7,34 +8,14 @@ export type ObjectSyncMetaInfo = {
   objectId: unknown;
   typeId: string;
   object: object;
-  client?: ClientObjectInfo<any>;
-  host?: HostObjectInfo<any>;
+  client?: ApplicatorObjectInfo<any>;
+  host?: ChangeTrackerObjectInfo<any>;
 };
-
-export class ObjectInfoBase {
-  constructor(private readonly _objectSyncMetaInfo: ObjectSyncMetaInfo) {}
-
-  get objectId(): unknown {
-    return this._objectSyncMetaInfo.objectId;
-  }
-
-  get typeId(): string {
-    return this._objectSyncMetaInfo.typeId;
-  }
-
-  get object(): object {
-    return this._objectSyncMetaInfo.object;
-  }
-
-  get objectSyncMetaInfo() {
-    return this._objectSyncMetaInfo;
-  }
-}
 
 export function getObjectSyncMetaInfo(target: object): ObjectSyncMetaInfo | undefined {
   if (!target || typeof target !== "object") return undefined;
   if (typeof target === "function") return undefined;
-  // throw when the target is a constructor function
+
   return (target as any)[objectSyncSymbol] as ObjectSyncMetaInfo | undefined;
 }
 
@@ -65,7 +46,7 @@ export function ensureObjectSyncMetaInfo(settings: ObjectSyncMetaInfoCreateSetti
     throw new Error("objectIdPrefix must be provided when objectId is provided");
   }
 
-  const typeId = settings.typeId ?? settings.object.constructor.name;
+  const typeId = settings.typeId ?? getTrackableTypeInfo(settings.object.constructor as any)?.typeId ?? settings.object.constructor.name;
   const objectId = settings.objectId ?? createObjectId((settings as any).objectIdPrefix);
 
   metaInfo = {
@@ -78,10 +59,10 @@ export function ensureObjectSyncMetaInfo(settings: ObjectSyncMetaInfoCreateSetti
   return metaInfo;
 }
 
-export function getHostObjectInfo<T extends object>(obj: T): HostObjectInfo<T> | null {
+export function getHostObjectInfo<T extends object>(obj: T): ChangeTrackerObjectInfo<T> | null {
   return getObjectSyncMetaInfo(obj)?.host ?? null;
 }
 
-export function getClientObjectInfo<T extends object>(obj: T): ClientObjectInfo<T> | null {
+export function getClientObjectInfo<T extends object>(obj: T): ApplicatorObjectInfo<T> | null {
   return getObjectSyncMetaInfo(obj)?.client ?? null;
 }

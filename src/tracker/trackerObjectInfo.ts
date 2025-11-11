@@ -7,14 +7,14 @@ import {
   DeleteObjectMessage,
   ExecuteObjectMessage,
   isPropertyInfoSymbol,
-  ObjectSync,
   MethodExecuteResult,
 } from "../shared/index.js";
-import { checkCanUseMethod, checkCanUseProperty, getTrackableTypeInfo } from "./decorators.js";
-import { ClientConnection, ObjectSyncHost } from "./host.js";
-import { ensureObjectSyncMetaInfo, getObjectSyncMetaInfo, ObjectSyncMetaInfo, ObjectSyncMetaInfoCreateSettings, ObjectInfoBase } from "../shared/objectSyncMetaInfo.js";
-import { invokeOnConvertedToTrackable, invokeOnTick } from "./trackedTarget.js";
+import { beforeSendObjectToClient, beforeSendPropertyToClient, beforeExecuteOnClient, getTrackableTypeInfo, nothing } from "./decorators.js";
+import { ClientConnection, ObjectChangeTracker } from "./tracker.js";
+import { ensureObjectSyncMetaInfo, getObjectSyncMetaInfo, ObjectSyncMetaInfo, ObjectSyncMetaInfoCreateSettings } from "../shared/objectSyncMetaInfo.js";
+import { invokeOnConvertedToTrackable, invokeOnTick } from "./interfaces.js";
 import { Constructor, hasInIterable, OneOrMany, toIterable } from "../shared/types.js";
+import { ObjectInfoBase } from "../shared/objectInfoBase.js";
 
 export type AdditionalHostPropertyInfo = {
   hasPendingChanges: boolean;
@@ -45,9 +45,9 @@ export type ClientFilter = {
 };
 
 function isForClientConnection(clientConnection: ClientConnection, filter: ClientFilter): boolean {
-  let hasDesignation = filter.designations === undefined || clientConnection.designation === undefined;
+  let hasDesignation = filter.designations === undefined || clientConnection.identity === undefined;
   if (!hasDesignation) {
-    hasDesignation = hasInIterable(filter.designations!, clientConnection.designation);
+    hasDesignation = hasInIterable(filter.designations!, clientConnection.identity);
   }
 
   let hasClientConnection = filter.clients === undefined;
@@ -58,32 +58,10 @@ function isForClientConnection(clientConnection: ClientConnection, filter: Clien
   return filter.isExclusive === (hasDesignation && hasClientConnection);
 }
 
-export type ClientSpecificView<T extends object> = {
-  /**
-   * Optional filter to restrict the view to specific clients
-   */
-  filter?: ClientFilter;
-
-  /**
-   * Callback to modify property info before sending to the client; return null to exclude the property
-   * @param client The client requesting the property info
-   * @param key The property key
-   * @param propertyInfo The current property info
-   */
-  onProperty?<TKey extends keyof T>(client: ClientConnection, key: TKey, propertyInfo: PropertyInfo<T, TKey>): PropertyInfo<T, TKey> | null;
-
-  /**
-   * Callback to modify the typeId before sending to the client; return null to exclude the object from beeing sent to the client
-   * @param client The client requesting the typeId
-   * @param typeId The current typeId of the object
-   */
-  onTypeId?(client: ClientConnection, typeId: string): string | null;
-};
-
 export type ServerObjectSyncMetaInfoCreateSettings<T extends object> = ObjectSyncMetaInfoCreateSettings<T> & {
   isRoot: boolean;
   objectIdPrefix: string;
-  owner: ObjectSyncHost;
+  owner: ObjectChangeTracker;
 };
 
 type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
@@ -103,44 +81,30 @@ type PendingMethodCall = {
  * TrackableObject wraps an object for change tracking and client synchronization on the host side.
  * It manages property changes, client-specific views, and message generation for create, change, delete, and execute operations.
  */
-export class HostObjectInfo<T extends object> extends ObjectInfoBase {
-  /**
-   * Creates a TrackableObject from a plain object, optionally specifying typeId and objectId.
-   * Registers tracked properties and initializes their values.
-   */
-  static createFromObject<T extends object>(settings: ServerObjectSyncMetaInfoCreateSettings<T>): HostObjectInfo<T> {
-    const metaInfo = ensureObjectSyncMetaInfo(settings);
-    if (!metaInfo) {
-      throw new Error("Failed to create HostObjectInfo: unable to ensure ObjectSyncMetaInfo.");
-    }
-    metaInfo.host = new HostObjectInfo<T>(metaInfo, settings.owner, settings.isRoot, settings.objectIdPrefix);
-    invokeOnConvertedToTrackable(metaInfo.object as T, metaInfo.host);
-
-    const trackableTypeInfo = getTrackableTypeInfo((settings.object as any).constructor);
-    if (trackableTypeInfo) {
-      trackableTypeInfo.trackedProperties.forEach((propertyInfo, key) => {
-        metaInfo.host!.onPropertyChanged(key as keyof T, (settings.object as any)[key]);
-      });
-    }
-    return metaInfo.host!;
-  }
-
+export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   /**
    * Ensures an object is auto-trackable, returning a TrackableObject if possible.
    * If the object is already trackable, returns the existing wrapper.
    */
-  static tryEnsureAutoTrackable<T extends object>(settings: ServerObjectSyncMetaInfoCreateSettings<T>): HostObjectInfo<T> | null {
+  static create<T extends object>(settings: ServerObjectSyncMetaInfoCreateSettings<T>): ChangeTrackerObjectInfo<T> | null {
     if (!settings.object || typeof settings.object !== "object") return null;
 
     const trackableTypeInfo = getTrackableTypeInfo((settings.object as any).constructor);
-    if (trackableTypeInfo?.isAutoTrackable !== true) return null;
+    if (!trackableTypeInfo) return null;
 
     const metaInfo = ensureObjectSyncMetaInfo(settings);
     if (!metaInfo) {
       throw new Error("Failed to create HostObjectInfo: unable to ensure ObjectSyncMetaInfo.");
     }
 
-    return metaInfo.host ?? this.createFromObject(settings);
+    if (metaInfo.host) return metaInfo.host;
+
+    metaInfo.host = new ChangeTrackerObjectInfo<T>(metaInfo, settings.owner, settings.isRoot, settings.objectIdPrefix);
+    invokeOnConvertedToTrackable(metaInfo.object as T, metaInfo.host);
+    trackableTypeInfo.trackedProperties.forEach((propertyInfo, key) => {
+      metaInfo.host!.onPropertyChanged(key as keyof T, (settings.object as any)[key]);
+    });
+    return metaInfo.host!;
   }
 
   /** Holds the current set of property changes for this object. */
@@ -150,8 +114,6 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   private readonly _pendingMethodInvokeCalls: Map<unknown, PendingMethodCall> = new Map();
   /** Holds client filter settings for restricting visibility. */
   private _clientFilters: ClientFilter | null = null;
-  /** Holds all registered client-specific views for this object. */
-  private _views: ClientSpecificView<T>[] = [];
   /** Holds the set of clients which know about this. */
   private _clients: Set<ClientConnection> = new Set();
 
@@ -160,7 +122,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
   /**
    * Constructs a TrackableObject with a typeId and optional objectId.
    */
-  private constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, private readonly _host: ObjectSyncHost, private _isRootObject: boolean, private readonly _objectIdPrefix: string) {
+  private constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, private readonly _host: ObjectChangeTracker, private _isRootObject: boolean, private readonly _objectIdPrefix: string) {
     super(objectSyncMetaInfo);
 
     this._changeSet = {
@@ -197,37 +159,6 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
 
     const filter = this._clientFilters;
     return isForClientConnection(client, filter);
-  }
-
-  /**
-   * Adds a client-specific view to this object.
-   */
-  addView(view: ClientSpecificView<T>): void {
-    this._views.push(view);
-  }
-
-  /**
-   * Removes a client-specific view from this object.
-   * @returns true if the view was removed, false otherwise.
-   */
-  removeView(view: ClientSpecificView<T>): boolean {
-    const initialLength = this._views.length;
-    this._views = this._views.filter((v) => v !== view);
-    return this._views.length < initialLength;
-  }
-
-  /**
-   * Returns all registered client-specific views for this object.
-   */
-  get allRegisteredViews(): readonly ClientSpecificView<T>[] {
-    return this._views;
-  }
-
-  /**
-   * Returns all views that applyAsync to a given client.
-   */
-  getViewsForClient(client: ClientConnection): ClientSpecificView<T>[] {
-    return this._views.filter((view) => !view.filter || hasInIterable(view.filter.clients, client) === view.filter.isExclusive);
   }
 
   /**
@@ -269,6 +200,17 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
     current.hasPendingChanges = true;
   }
 
+  createPropertyInfo(value: any): PropertyInfo<T, keyof T> {
+    const trackable = this.convertToTrackableObjectReference(value);
+    const paramInfo: PropertyInfo<any, any> = {
+      value: trackable ?? value,
+      objectId: trackable?.objectSyncMetaInfo.objectId,
+      [isPropertyInfoSymbol]: true,
+    };
+
+    return paramInfo;
+  }
+
   /**
    * Records a method execution for this object, converting arguments to trackable references if needed.
    */
@@ -276,12 +218,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
     const parameters: PropertyInfos<any, any>[] = [];
 
     args.forEach((arg, index) => {
-      const trackable = this.convertToTrackableObjectReference(arg);
-      const paramInfo: PropertyInfo<any, any> = {
-        value: trackable ?? arg,
-        objectId: trackable?.objectSyncMetaInfo.objectId,
-        [isPropertyInfoSymbol]: true,
-      };
+      const paramInfo = this.createPropertyInfo(arg);
       parameters.push(paramInfo);
     });
 
@@ -319,7 +256,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
     return result as MethodCallResult<TResult<T, K>> | null;
   }
 
-  invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): { clientResults: MethodCallResult<TResult<T, K>>, hostResult: TResult<T, K> } {
+  invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): { clientResults: MethodCallResult<TResult<T, K>>; hostResult: TResult<T, K> } {
     const hostResult = (this.object as any)[method](...args) as TResult<T, K>;
     const clientResults = this.getInvokeResults<K>(method)!;
     return { clientResults, hostResult };
@@ -340,7 +277,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
       pendingCall.resultByClient.set(
         client,
         new Promise<any>((resolve, reject) => {
-          if (methodExecuteResult.status === "resolved" || methodExecuteResult.status === "sync") {
+          if (methodExecuteResult.status === "resolved") {
             resolve(methodExecuteResult.result);
           } else {
             reject(methodExecuteResult.error);
@@ -361,7 +298,7 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
    */
   public convertToTrackableObjectReference(target: object) {
     if (target && typeof target === "object") {
-      return HostObjectInfo.tryEnsureAutoTrackable({
+      return ChangeTrackerObjectInfo.create({
         object: target,
         isRoot: false,
         objectIdPrefix: this._objectIdPrefix,
@@ -376,13 +313,11 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
    * Returns null if the object should not be sent to the client.
    */
   getCreateMessage(client: ClientConnection): CreateObjectMessage<T> | null {
-    let typeId = this.typeId;
-    const views = this.getViewsForClient(client).filter((v) => v.onTypeId);
-    for (const view of views) {
-      const newTypeId = view.onTypeId!(client, typeId);
-      if (!newTypeId) return null;
-      typeId = newTypeId;
-    }
+    const typeIdOrNothing = beforeSendObjectToClient(this.object.constructor as Constructor, this.object, this.typeId, client);
+    if (typeIdOrNothing === nothing) return null;
+
+    const typeId = typeIdOrNothing as string;
+
     const result: CreateObjectMessage<T> = {
       type: "create",
       objectId: this.objectId,
@@ -446,12 +381,21 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
    * Returns all pending execute messages for this object.
    */
   getExecuteMessages(client: ClientConnection): ExecuteObjectMessage<T>[] {
-    const result = this._methodInvokeCalls.filter((msg) => {
-      return checkCanUseMethod(this.object.constructor as Constructor, msg.method, client.designation);
-    });
-    result.forEach((msg) => {
-      this.onClientMethodExecuteSendToClient(client, msg.id);
-    });
+    const result: ExecuteObjectMessage<T>[] = [];
+    for (const methodExecuteCall of this._methodInvokeCalls) {
+      const args = methodExecuteCall.parameters.map((paramInfo) => {
+        return paramInfo.value;
+      });
+      if (beforeExecuteOnClient(this.object.constructor as Constructor, this.object, methodExecuteCall.method, args, client) === false) {
+        continue;
+      }
+
+      result.push({
+        ...methodExecuteCall,
+        parameters: args.map((arg) => this.createPropertyInfo(arg)),
+      });
+    }
+
     return result;
   }
 
@@ -460,34 +404,53 @@ export class HostObjectInfo<T extends object> extends ObjectInfoBase {
    * If includeChangedOnly is true, only changed properties are included.
    */
   private getProperties(client: ClientConnection, includeChangedOnly: boolean): PropertyInfos<T> {
-    const views = this.getViewsForClient(client).filter((v) => v.onProperty);
     const result: PropertyInfos<T> = {};
     Object.keys(this._changeSet.properties).forEach((key) => {
-      const propertyInfo = this._changeSet.properties[key as keyof T]!;
+      let propertyInfo = this._changeSet.properties[key as keyof T]!;
       if (includeChangedOnly && !propertyInfo.hasPendingChanges) return;
 
-      if (!checkCanUseProperty(this.object.constructor as Constructor, key, client.designation)) return;
+      const finalValue = beforeSendPropertyToClient(this.object.constructor as Constructor, this.object, key, propertyInfo.value, client);
+      if (finalValue === nothing) return;
 
-      let clientPropertyInfo: PropertyInfo<T, keyof T> = {
-        objectId: propertyInfo.objectId,
-        value: propertyInfo.value,
-        [isPropertyInfoSymbol]: true,
-      };
+      if (finalValue !== propertyInfo.value) {
+        propertyInfo = this.createPropertyInfo(finalValue) as any;
 
-      if (propertyInfo.objectId === undefined && propertyInfo.objectId === null) {
-        delete clientPropertyInfo.objectId;
+        const metaInfo = getObjectSyncMetaInfo(finalValue as object);
+        propertyInfo.objectId = metaInfo?.objectId;
       }
 
-      for (const view of views) {
-        const newPropertyInfo = view.onProperty!(client, key as keyof T, clientPropertyInfo);
-        if (newPropertyInfo === null) {
-          return;
-        }
-        clientPropertyInfo = newPropertyInfo;
-      }
-      result[key as keyof T] = clientPropertyInfo;
+      const clientPropertyInfo = this.serializePropertyInfo(key as keyof T, propertyInfo as PropertyInfo<T, keyof T>, client);
+      if (clientPropertyInfo) result[key as keyof T] = clientPropertyInfo;
     });
     return result;
+  }
+
+  private serializePropertyInfo(key: keyof T, propertyInfo: PropertyInfo<T, keyof T>, client: ClientConnection) {
+    let clientPropertyInfo: PropertyInfo<T, keyof T> = {
+      objectId: propertyInfo.objectId,
+      value: propertyInfo.value,
+      [isPropertyInfoSymbol]: true,
+    };
+
+    if (propertyInfo.objectId === undefined && propertyInfo.objectId === null) {
+      delete clientPropertyInfo.objectId;
+    }
+
+    if (clientPropertyInfo.value && clientPropertyInfo.objectId === undefined && typeof clientPropertyInfo.value === "object") {
+      const serializedValue = this.serializeValue(clientPropertyInfo.value);
+      if (serializedValue === null) {
+        clientPropertyInfo.value = clientPropertyInfo.value;
+      } else {
+        clientPropertyInfo.value = serializedValue.value as any;
+        clientPropertyInfo.typeId = serializedValue.typeId;
+      }
+    }
+
+    return clientPropertyInfo;
+  }
+
+  private serializeValue(value: object) {
+    return this.host.serializeValue(value);
   }
 
   /**

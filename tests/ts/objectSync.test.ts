@@ -1,69 +1,177 @@
+import { syncMethod, syncObject, syncProperty, ClientConnection, ObjectSync, getHostObjectInfo, nothing, TypeSerializer } from "../../src/index.js";
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
-import { syncMethod, syncObject, syncProperty, ClientConnection, ObjectSync, MethodCallResult, getHostObjectInfo } from "../../src/index.js";
 
-@syncObject({ typeId: "Beta" })
-class Beta {
-  constructor(value: number = 0) {
-    this.value = value;
+@syncObject({
+  beforeSendToClient(object, constructor, typeId, clientConnection) {
+    return object.syncAsClientRoot ? ClientRoot : typeId;
   }
-  @syncProperty() accessor value: number;
+})
+class Root {
+  syncAsClientRoot = false;
+  allowValueMutation = false;
 
-  @syncMethod({
-    clientMethod: "invokeInternal",
+  @syncProperty({
+    beforeSendToClient(object, key, value, clientConnection) {
+      if (clientConnection.identity === "host") {
+        return nothing;
+      }
+      if (object.allowValueMutation && key === "value") {
+        return value + value;
+      }
+      return value;
+    },
+    canApply(object, key, clientConnection) {
+      if (clientConnection.identity === "host") {
+        return false;
+      }
+      return true;
+    },
   })
-  public invoke(value: number): number {
-    return value + value;
-  }
+  accessor value: number = 0;
+
+  @syncProperty()
+  accessor testClass: SerializableClass | undefined;
 
   @syncMethod()
-  private async invokeInternal(value: number): Promise<number> {
-    return Promise.resolve(value);
+  async invoke(value: number): Promise<number> {
+    return value + value;
+  }
+}
+
+@syncObject({})
+class ClientRoot {
+  @syncProperty()
+  accessor value: number = 0;
+}
+
+class SerializableClass {
+  #value: number;
+
+  constructor(value: number = 0) {
+    this.#value = value;
+  }
+
+  get value(): number {
+    return this.#value;
   }
 }
 
 describe("ObjectSync client-host integration (objectSync)", () => {
-  let objectSync0: ObjectSync;
-  let objectSync1: ObjectSync;
-  let hBeta: Beta;
-  let clientToken0: ClientConnection;
-  let clientToken1: ClientConnection;
+  let hostObjectSync: ObjectSync;
+  let clientObjectSync: ObjectSync;
+  let clientObjectSyncClientConnection: ClientConnection;
+  let hostObjectSyncClientConnection: ClientConnection;
+
+  let hostRoot: Root;
 
   beforeEach(() => {
-    objectSync0 = new ObjectSync({});
-    objectSync1 = new ObjectSync({});
-    hBeta = new Beta();
+    const serializableClassSerializer: TypeSerializer<SerializableClass> = {
+      typeId: "SerializableClass",
+      type: SerializableClass,
+      serialize: (obj: SerializableClass) => ({ value: obj.value }),
+      deserialize: (data: any) => new SerializableClass(data.value),
+    };
+    const defaultSettings = {
+      typeSerializers: [serializableClassSerializer],
+    };
+    const hostSettings = {
+      identity: "host",
+      typeGenerators: [],
+      ...defaultSettings,
+    };
 
-    clientToken0 = objectSync0.host.registerClient();
-    clientToken1 = objectSync1.host.registerClient();
+    const clientSettings = {
+      identity: "client",
+      typeGenerators: [Root, ClientRoot],
+      ...defaultSettings,
+    };
 
-    objectSync0.host.track(hBeta);
+    hostObjectSync = new ObjectSync(hostSettings);
+    clientObjectSync = new ObjectSync(clientSettings);
+
+    clientObjectSyncClientConnection = hostObjectSync.tracker.registerClient({ identity: "client" });
+    hostObjectSyncClientConnection = clientObjectSync.tracker.registerClient({ identity: "host" });
+
+    hostRoot = new Root();
+    hostObjectSync.tracker.track(hostRoot);
   });
 
-  it("should sync objects and methods between host and client", async () => {
-    hBeta.value = 1;
-    await exchangeMessagesAsync(objectSync0, objectSync1);
+  it("should report creation to client", async () => {
+    hostRoot.value = 42;
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
 
-    const cBeta = objectSync1.client.findObjectOfType(Beta)!;
-    assert.strictEqual(cBeta.value, hBeta.value);
+    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    assert.notStrictEqual(clientRoot, hostRoot);
+    assert.strictEqual(clientRoot.value, hostRoot.value);
+  });
 
-    hBeta.value = 2;
-    assert.notStrictEqual(cBeta.value, hBeta.value);
-    await exchangeMessagesAsync(objectSync0, objectSync1);
-    assert.strictEqual(cBeta.value, hBeta.value);
+  it("should report changes to client", async () => {
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
 
-    cBeta.value = 3;
-    assert.notStrictEqual(cBeta.value, hBeta.value);
-    await exchangeMessagesAsync(objectSync0, objectSync1);
-    assert.strictEqual(cBeta.value, hBeta.value);
+    assert.strictEqual(clientRoot.value, hostRoot.value);
 
-    const hostResult = hBeta.invoke(4);
-    const methodCallResult = getHostObjectInfo(hBeta)!.getInvokeResults("invoke")!;
-    assert.strictEqual(hostResult, 4 + 4);
-    await exchangeMessagesAsync(objectSync0, objectSync1);
-    const resultsByClient = await methodCallResult;
-    const resultFromClient = await resultsByClient.get(clientToken0);
-    assert.strictEqual(resultFromClient, 4);
+    hostRoot.value = 100;
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    assert.strictEqual(clientRoot.value, hostRoot.value);
+  });
+
+  it("should execute methods on client", async () => {
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+
+    const invokeArgument = 55;
+    const expectedHostResult = invokeArgument + invokeArgument;
+
+    const { clientResults, hostResult } = getHostObjectInfo(hostRoot)!.invoke("invoke", invokeArgument);
+
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientInvokeResults = await clientResults;
+    const clientResult = await clientInvokeResults.get(clientObjectSyncClientConnection)!;
+    const hostResultValue = await hostResult;
+
+    assert.strictEqual(hostResultValue, expectedHostResult);
+    assert.strictEqual(clientResult, expectedHostResult);
+  });
+
+  it("should send anything to the host", async () => {
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+
+    const oldHostValue = hostRoot.value;
+    clientRoot.value = 77;
+
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    assert.strictEqual(hostRoot.value, oldHostValue);
+  });
+
+  it("should sync serializable types", async () => {
+    hostRoot.testClass = new SerializableClass(123);
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    assert.notStrictEqual(clientRoot.testClass, hostRoot.testClass);
+    assert.strictEqual(clientRoot.testClass!.value, hostRoot.testClass!.value);
+  });
+
+  it("should sync a different type to the client", async () => {
+    hostRoot.value = 42;
+    hostRoot.syncAsClientRoot = true;
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+    const clientRoot = clientObjectSync.applicator.findObjectOfType(ClientRoot)!;
+    assert.notStrictEqual(clientRoot, hostRoot);
+    assert.strictEqual(clientRoot.value, hostRoot.value);
+  });
+
+  it("it should send a different value than the original value to the client", async () => {
+    hostRoot.value = 42;
+    hostRoot.allowValueMutation = true;
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    assert.notStrictEqual(clientRoot.value, hostRoot.value);
   });
 });
 
@@ -76,5 +184,3 @@ async function exchangeMessagesAsync(objectSync0: ObjectSync, objectSync1: Objec
     return objectSync0.applyMessagesAsync(messagesByClient);
   });
 }
-
-

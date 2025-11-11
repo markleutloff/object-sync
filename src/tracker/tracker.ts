@@ -1,8 +1,8 @@
+import { TypeSerializer } from "../applicator/applicator.js";
 import { ChangeObjectMessage, CreateObjectMessage, DeleteObjectMessage, ExecuteObjectMessage, isPropertyInfo, Message, MethodExecuteResult, PropertyInfo, TrackedObjectPool } from "../shared/index.js";
 import { getHostObjectInfo } from "../shared/objectSyncMetaInfo.js";
-import { forEachIterable, OneOrMany } from "../shared/types.js";
-import { checkCanUseObject } from "./decorators.js";
-import { ClientFilter, ClientSpecificView, HostObjectInfo, ServerObjectSyncMetaInfoCreateSettings } from "./hostObjectInfo.js";
+import { Constructor, forEachIterable, OneOrMany } from "../shared/types.js";
+import { ClientFilter, ChangeTrackerObjectInfo, ServerObjectSyncMetaInfoCreateSettings } from "./trackerObjectInfo.js";
 
 export type TrackSettings = {
   /**
@@ -20,48 +20,71 @@ export type TrackSettings = {
    */
   clientVisibility?: ClientFilter;
 
-  /**
-   * If true, tracking an already tracked object will be ignored instead of throwing an error.
-   * Defaults to false.
-   */
-  ignoreAlreadyTracked?: boolean;
-
   knownClients?: OneOrMany<ClientConnection>;
 };
 
-export type ObjectSyncHostSettings = {
-  objectIdPrefix?: string;
-  objectPool?: TrackedObjectPool;
-  designation?: string;
+export type ObjectChangeTrackerSettings = {
+  objectIdPrefix: string;
+  objectPool: TrackedObjectPool;
+  identity: string;
+  typeSerializers: Map<string, TypeSerializer<any>>;
+};
+
+type FinalObjectChangeTrackerSettings = {
+  objectIdPrefix: string;
+  identity: string;
 };
 
 export type ClientConnectionSettings = {
-  designation?: string;
+  identity: string;
 };
 
-export type ClientConnection = ClientConnectionSettings;
+export type ClientConnection = {
+  identity: string;
+};
 
 /**
  * The ChangeTrackerHost manages the lifecycle and visibility of trackable objects on the host/server side.
  * It tracks which objects are visible to which clients, manages object creation/deletion, and generates messages for clients.
  */
-export class ObjectSyncHost {
+export class ObjectChangeTracker {
   /** Pool of all currently tracked objects and their info. */
   private _trackedObjectPool: TrackedObjectPool;
   /** Maps client IDs to lists of delete messages for objects that have been untracked. */
   private _untrackedObjectInfosByClient = new Map<ClientConnection, DeleteObjectMessage[]>();
 
   private _clients: Set<ClientConnectionSettings> = new Set();
+  private _serializers: Map<Constructor, TypeSerializer<any> & { typeId: string }> = new Map<Constructor, TypeSerializer<any> & { typeId: string }>();
 
-  constructor(private readonly _settings: ObjectSyncHostSettings = {}) {
-    if (!this._settings.objectIdPrefix) {
-      this._settings.objectIdPrefix = `host-${Date.now()}-`;
-    }
-    this._trackedObjectPool = this._settings.objectPool ?? new TrackedObjectPool();
+  private readonly _settings: FinalObjectChangeTrackerSettings;
+
+  constructor(settings: ObjectChangeTrackerSettings) {
+    this._settings = {
+      identity: settings.identity,
+      objectIdPrefix: settings.objectIdPrefix,
+    };
+    this._trackedObjectPool = settings.objectPool;
+
+    settings.typeSerializers.forEach((gen, typeId) => {
+      const serializer = gen as TypeSerializer<any> & { typeId: string };
+      serializer.typeId = serializer.typeId ?? typeId;
+      this.registerSerializer(serializer);
+    });
   }
 
-  get designation() {
-    return this._settings.designation;
+  get settings(): FinalObjectChangeTrackerSettings {
+    return this._settings;
+  }
+
+  registerSerializer(serializer: TypeSerializer<any> & { typeId: string }): void {
+    if (this._serializers.has(serializer.type)) {
+      throw new Error(`Serializer for typeId ${serializer.typeId} is already registered`);
+    }
+    this._serializers.set(serializer.type, serializer);
+  }
+
+  get identity() {
+    return this._settings.identity;
   }
 
   /** Returns all currently tracked objects. */
@@ -69,7 +92,7 @@ export class ObjectSyncHost {
     return this._trackedObjectPool.all;
   }
 
-  registerClient(settings: ClientConnectionSettings = {}): ClientConnection {
+  registerClient(settings: ClientConnectionSettings): ClientConnection {
     const clientToken = JSON.parse(JSON.stringify(settings));
     this._clients.add(clientToken);
     return clientToken;
@@ -105,25 +128,6 @@ export class ObjectSyncHost {
   }
 
   /**
-   * Adds a client-specific view to a tracked object.
-   */
-  addView<T extends object>(obj: T, view: ClientSpecificView<T>): void {
-    const tracked = getHostObjectInfo(obj);
-    if (!tracked) throw new Error("Object is not tracked");
-    tracked.addView(view);
-  }
-
-  /**
-   * Removes a client-specific view from a tracked object.
-   * @returns true if the view was removed, false otherwise.
-   */
-  removeView<T extends object>(obj: T, view: ClientSpecificView<T>): boolean {
-    const tracked = getHostObjectInfo(obj);
-    if (!tracked) return false;
-    return tracked.removeView(view);
-  }
-
-  /**
    * Begins tracking an object, optionally with settings for object ID and client visibility.
    * Throws if objectId is specified for an already-trackable object.
    */
@@ -131,46 +135,43 @@ export class ObjectSyncHost {
     this.trackInternal(target, trackSettings);
   }
 
-  private trackInternal<T extends object>(target: T, trackSettings?: TrackSettings): HostObjectInfo<T> | null {
+  private trackInternal<T extends object>(target: T, trackSettings?: TrackSettings): ChangeTrackerObjectInfo<T> | null {
     if (!target) return null;
 
     const isRoot = trackSettings?.isRoot !== false;
 
-    if (this._trackedObjectPool.has(target) && getHostObjectInfo(target)) {
-      if (isRoot && (trackSettings?.ignoreAlreadyTracked ?? false) === false) {
-        throw new Error("Object is already tracked");
+    let hostObjectInfo: ChangeTrackerObjectInfo<T> | null = getHostObjectInfo(target);
+    if (!hostObjectInfo) {
+      const creationSettings: ServerObjectSyncMetaInfoCreateSettings<T> = {
+        objectId: trackSettings?.objectId,
+        isRoot,
+        object: target,
+        objectIdPrefix: this._settings.objectIdPrefix!,
+        owner: this,
+      };
+
+      hostObjectInfo = getHostObjectInfo(target) ?? ChangeTrackerObjectInfo.create<T>(creationSettings);
+      if (!hostObjectInfo) return null;
+
+      if (!this._trackedObjectPool.has(target)) this._trackedObjectPool.add(target);
+
+      this._untrackedObjectInfosByClient.forEach((deleteMessages, client) => {
+        let deleteMessageIndex = deleteMessages.findIndex((m) => m.objectId === hostObjectInfo!.objectId);
+        if (deleteMessageIndex === -1) return;
+        deleteMessages.splice(deleteMessageIndex, 1);
+        if (deleteMessages.length === 0) {
+          this._untrackedObjectInfosByClient.delete(client);
+        }
+      });
+      if (trackSettings?.clientVisibility) {
+        this.setClientRestriction(target, trackSettings.clientVisibility);
       }
-      return null;
-    }
-
-    const creationSettings: ServerObjectSyncMetaInfoCreateSettings<T> = {
-      objectId: trackSettings?.objectId,
-      isRoot,
-      object: target,
-      objectIdPrefix: this._settings.objectIdPrefix!,
-      owner: this,
-    };
-
-    const hostObjectInfo: HostObjectInfo<T> | null = getHostObjectInfo(target) ?? HostObjectInfo.tryEnsureAutoTrackable<T>(creationSettings) ?? HostObjectInfo.createFromObject(creationSettings);
-
-    if (!hostObjectInfo) return null;
-
-    if (!this._trackedObjectPool.has(target)) this._trackedObjectPool.add(target);
-
-    this._untrackedObjectInfosByClient.forEach((deleteMessages, client) => {
-      let deleteMessageIndex = deleteMessages.findIndex((m) => m.objectId === hostObjectInfo.objectId);
-      if (deleteMessageIndex === -1) return;
-      deleteMessages.splice(deleteMessageIndex, 1);
-      if (deleteMessages.length === 0) {
-        this._untrackedObjectInfosByClient.delete(client);
-      }
-    });
-    if (trackSettings?.clientVisibility) {
-      this.setClientRestriction(target, trackSettings.clientVisibility);
+    } else {
+      if (!this._trackedObjectPool.has(target)) this._trackedObjectPool.add(target);
     }
 
     if (trackSettings?.knownClients) {
-      const clients = getHostObjectInfo(target)?.clients;
+      const clients = hostObjectInfo.clients;
       if (clients) {
         forEachIterable(trackSettings.knownClients, (client) => {
           clients.add(client);
@@ -178,7 +179,7 @@ export class ObjectSyncHost {
       }
     }
 
-    return hostObjectInfo;
+    return hostObjectInfo!;
   }
 
   /**
@@ -313,9 +314,6 @@ export class ObjectSyncHost {
    * Also tracks any nested objects referenced in the message.
    */
   private getMessagesForTrackableObjectInfo(syncObject: object, client: ClientConnection, messages: Message[], newTrackableObjects: object[]): void {
-    if (!checkCanUseObject(syncObject, client.designation)) return;
-    if (!checkCanUseObject(syncObject, this._settings.designation)) return;
-
     const hostObjectInfo = getHostObjectInfo(syncObject);
     if (!hostObjectInfo?.isForClient(client)) return;
 
@@ -401,5 +399,14 @@ export class ObjectSyncHost {
         this.untrackInternal(tracked, false);
       }
     }
+  }
+
+  serializeValue(value: object): { value: any; typeId: string } | null {
+    const serializer = this._serializers.get(value.constructor as Constructor);
+    if (!serializer) return null;
+    return {
+      value: serializer.serialize ? serializer.serialize(value) : "toJSON" in value && typeof value.toJSON === "function" ? value.toJSON() : "toValue" in value && typeof value.toValue === "function" ? value.toValue() : value,
+      typeId: serializer.typeId,
+    };
   }
 }

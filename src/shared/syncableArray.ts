@@ -1,8 +1,9 @@
-import { ObjectSyncClient } from "../client/client.js";
-import { ITrackableOnUpdateProperty, onUpdateProperty } from "../client/trackableTarget.js";
-import { syncObject } from "../host/decorators.js";
-import { HostObjectInfo } from "../host/hostObjectInfo.js";
-import { ITrackedOnConvertedToTrackable, ITrackedOnTick, onConvertedToTrackable, onTick } from "../host/trackedTarget.js";
+import { ObjectChangeApplicator } from "../applicator/applicator.js";
+import { ITrackableOnUpdateProperty, onUpdateProperty } from "../applicator/trackableTarget.js";
+import { syncObject } from "../tracker/decorators.js";
+import { ClientConnection } from "../tracker/tracker.js";
+import { ChangeTrackerObjectInfo } from "../tracker/trackerObjectInfo.js";
+import { ITrackedOnConvertedToTrackable, ITrackedOnTick, onConvertedToTrackable, onTick } from "../tracker/interfaces.js";
 import { isPropertyInfoSymbol, PropertyInfo } from "./messages.js";
 import { getHostObjectInfo } from "./objectSyncMetaInfo.js";
 
@@ -78,8 +79,8 @@ export class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrack
     return this._values.length;
   }
 
-  private convertPropertyInfosToItems(items: PropertyInfo<any, any>[], client: ObjectSyncClient): T[] {
-    return items.map((item) => client.getPropertyValue(item));
+  private convertPropertyInfosToItems(items: PropertyInfo<any, any>[], client: ObjectChangeApplicator, clientConnection: ClientConnection): T[] {
+    return items.map((item) => client.getPropertyValue(item, clientConnection));
   }
 
   splice(start: number, deleteCount?: number, ...items: T[]): T[] {
@@ -167,11 +168,11 @@ export class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrack
     }
   }
 
-  private convertItemsToPropertyInfos(serverObjectInfo: HostObjectInfo<any>, items: T[]): PropertyInfo<any, any>[] {
+  private convertItemsToPropertyInfos(serverObjectInfo: ChangeTrackerObjectInfo<any>, items: T[]): PropertyInfo<any, any>[] {
     return items.map((item) => this.convertItemToPropertyInfo(serverObjectInfo, item));
   }
 
-  private convertItemToPropertyInfo(serverObjectInfo: HostObjectInfo<any>, item: T): PropertyInfo<any, any> {
+  private convertItemToPropertyInfo(serverObjectInfo: ChangeTrackerObjectInfo<any>, item: T): PropertyInfo<any, any> {
     const metaInfo = serverObjectInfo.convertToTrackableObjectReference(item as any);
     const transformed: PropertyInfo<any, any> = {
       value: item,
@@ -197,24 +198,24 @@ export class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrack
     this._changes = [];
   }
 
-  [onConvertedToTrackable](hostObjectInfo: HostObjectInfo<SyncableArray<T>>): void {
+  [onConvertedToTrackable](hostObjectInfo: ChangeTrackerObjectInfo<SyncableArray<T>>): void {
     this._creation = [...this.convertItemsToPropertyInfos(hostObjectInfo, this._values)];
     this.onPropertyChanged("_creation", this._creation);
     this.onPropertyChanged("_changes", this._changes);
   }
 
-  [onUpdateProperty](key: string | number | symbol, value: any, isForCreate: boolean, client: ObjectSyncClient): boolean {
+  [onUpdateProperty](key: string | number | symbol, value: any, isForCreate: boolean, client: ObjectChangeApplicator, clientConnection: ClientConnection): boolean {
     if (isForCreate && key === "_creation") {
-      this.value = this.convertPropertyInfosToItems(value, client);
+      this.value = this.convertPropertyInfosToItems(value, client, clientConnection);
     } else if (!isForCreate && key === "_changes") {
-      this.applyTrackableArrayChanges(this._values, value, client);
+      this.applyTrackableArrayChanges(this._values, value, client, clientConnection);
     }
     return true;
   }
 
-  private applyTrackableArrayChanges(arr: T[], changes: SyncableArrayChange<T>[], client: ObjectSyncClient): T[] {
+  private applyTrackableArrayChanges(arr: T[], changes: SyncableArrayChange<T>[], client: ObjectChangeApplicator, clientConnection: ClientConnection): T[] {
     for (const change of changes) {
-      const newItems = this.convertPropertyInfosToItems(change.items, client);
+      const newItems = this.convertPropertyInfosToItems(change.items, client, clientConnection);
       const removedItems = arr.splice(change.start, change.deleteCount, ...newItems);
       if (removedItems.length > 0) this.onRemoved(change.start, removedItems);
       if (change.items.length > 0) this.onAdded(change.start, newItems);

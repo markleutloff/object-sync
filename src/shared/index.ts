@@ -4,4 +4,4 @@ export * from "./trackedObjectPool.js";
 export * from "./syncableArray.js";
 export * from "./syncableObservableArray.js";
 export * from "./objectSyncMetaInfo.js";
-export * from "./objectSync.js";
+export * from "../objectSync/index.js";

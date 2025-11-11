@@ -1,7 +1,6 @@
 {
   "compilerOptions": {
     "module": "es2022",
-    "outDir": "build",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": false,
@@ -10,11 +9,10 @@
     "removeComments": false,
     "paths": {
       // This is solely to stop a bug with @types/node as of 12/15/2023
-      "undici-types": [
-        "./node_modules/undici-types/index.d.ts"
-      ],
+      "undici-types": ["../../node_modules/undici-types/index.d.ts"]
     },
     "target": "ES2022" // or higher
   },
-  "include": ["src/**/*"]
+  "exclude": ["../../node_modules/**"],
+  "files": ["worker.ts"]
 }

@@ -3,11 +3,12 @@ export const isPropertyInfoSymbol = Symbol("isPropertyInfo");
 export type PropertyInfo<T extends object, TKey extends keyof T> = {
   value?: T[TKey];
   objectId?: unknown;
+  typeId?: string;
   [isPropertyInfoSymbol]?: true;
 };
 
 export type PropertyInfos<T extends object, TAdditionalPropertyInfo extends object = object> = { [K in keyof T]?: PropertyInfo<T, K> & TAdditionalPropertyInfo };
-export type ResolvablePropertyInfos<T extends object> = {
+export type ResolvablePropertyInfos<T> = {
   deleteProperty(key: keyof T & string): void;
   get deletedProperties(): (keyof T & string)[];
 } & {
@@ -53,6 +54,6 @@ export type MethodExecuteResult = {
   id: unknown;
   objectId: unknown;
   result: any;
-  status: "resolved" | "rejected" | "sync";
+  status: "resolved" | "rejected";
   error: any;
 };
