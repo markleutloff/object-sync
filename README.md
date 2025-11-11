@@ -87,7 +87,7 @@ const hostSync = new ObjectSync({
 // Register multiple clients with unique identities
 const clients = [];
 for (let i = 0; i < 3; i++) {
-  const clientToken = hostSync.tracker.registerClient({ identity: "client" + i });
+  const clientToken = hostSync.registerClient({ identity: "client" + i });
   clients.push(clientToken);
 }
 // Each client will receive synchronized state and updates
@@ -95,7 +95,7 @@ for (let i = 0; i < 3; i++) {
 
 ### 3. Array Synchronization
 
-hostSync.tracker.track(alpha);
+hostSync.track(alpha);
 
 Synchronize changes to arrays and observable arrays between host and client.
 
@@ -104,14 +104,14 @@ import { SyncableArray, SyncableObservableArray } from "simple-object-sync";
 
 // Host: Track a SyncableArray instance
 const alpha = new SyncableArray<string>(["init1", "init2"]);
-hostSync.tracker.track(alpha);
+hostSync.track(alpha);
 
 // Client: Find the synchronized array instance
-const alphaClient = clientSync.applicator.findObjectOfType(SyncableArray<string>)!;
+const alphaClient = clientSync.findObjectOfType(SyncableArray<string>)!;
 assert.deepStrictEqual(alpha.value, alphaClient.value); // Values are kept in sync
 
 // For event-driven array changes, use SyncableObservableArray
-const observableAlphaClient = clientSync.applicator.findObjectOfType(SyncableObservableArray<string>)!;
+const observableAlphaClient = clientSync.findObjectOfType(SyncableObservableArray<string>)!;
 // Listen for items being added
 observableAlphaClient.on("added", (items, start) => {
   // handle added items
@@ -146,7 +146,7 @@ import { ObjectSync } from "simple-object-sync";
 
 function createWorker(hostSync, id) {
   const worker = new Worker("./worker.js");
-  const clientToken = hostSync.tracker.registerClient({ identity: "client" + id });
+  const clientToken = hostSync.registerClient({ identity: "client" + id });
   return {
     clientToken,
     terminate() {
@@ -180,7 +180,7 @@ import { parentPort } from "worker_threads";
 import { ObjectSync } from "simple-object-sync";
 
 const clientSync = new ObjectSync({ identity: "client", typeGenerators: [Root] });
-const clientTokenFromHost = clientSync.tracker.registerClient({ identity: "host" });
+const clientTokenFromHost = clientSync.registerClient({ identity: "host" });
 
 parentPort.on("message", async (message) => {
   if (message.type === "messages") {

@@ -1,4 +1,4 @@
-import { ClientConnection, ObjectChangeTracker } from "../tracker/tracker.js";
+import { ClientConnection, ClientConnectionSettings, ObjectChangeTracker, TrackSettings } from "../tracker/tracker.js";
 import { allTypeGenerators, ObjectChangeApplicator, TypeGenerator, TypeSerializer } from "../applicator/applicator.js";
 import { Message, MethodExecuteResult } from "../shared/messages.js";
 import { TrackedObjectPool } from "../shared/trackedObjectPool.js";
@@ -58,16 +58,20 @@ export class ObjectSync {
     });
   }
 
-  get tracker(): ObjectChangeTracker {
-    return this._tracker;
-  }
+  // get tracker(): ObjectChangeTracker {
+  //   return this._tracker;
+  // }
 
-  get applicator(): ObjectChangeApplicator {
-    return this._applicator;
-  }
+  // get applicator(): ObjectChangeApplicator {
+  //   return this._applicator;
+  // }
 
   getMessages(): Map<ClientConnection, Message[]> {
     return this._tracker.getMessages();
+  }
+
+  applyAsync(messages: Message<any>[], clientConnection: ClientConnection) {
+    return this._applicator.applyAsync(messages, clientConnection);
   }
 
   applyClientMethodInvokeResults(resultsByClient: Map<ClientConnection, MethodExecuteResult[]>): void {
@@ -145,5 +149,55 @@ export class ObjectSync {
         }
       }
     }
+  }
+
+  // shorthands for the tracker and applicator
+  registerSerializer(serializer: TypeSerializer<any> & { typeId: string }): void {
+    this._tracker.registerSerializer(serializer);
+  }
+
+  get identity() {
+    return this._settings.identity;
+  }
+
+  /** Returns all currently tracked objects. */
+  get allTrackedObjects() {
+    return this._tracker.allTrackedObjects;
+  }
+
+  registerClient(settings: ClientConnectionSettings) {
+    return this._tracker.registerClient(settings);
+  }
+
+  /**
+   * Removes all client-specific state for a client (e.g., when disconnecting).
+   */
+  removeClient(client: ClientConnection): void {
+    this._tracker.removeClient(client);
+  }
+
+  /**
+   * Begins tracking an object, optionally with settings for object ID and client visibility.
+   * Throws if objectId is specified for an already-trackable object.
+   */
+  track<T extends object>(target: T, trackSettings?: TrackSettings): void {
+    this._tracker.track(target, trackSettings);
+  }
+
+  untrack<T extends object>(target: T): void {
+    this._tracker.untrack(target);
+  }
+
+  //// Applicator shorthands
+  registerGenerator(typeId: string, generator: TypeGenerator): void {
+    this._applicator.registerGenerator(typeId, generator);
+  }
+
+  findObjectOfType<T extends object>(constructor: Constructor<T>, objectId?: unknown) {
+    return this._applicator.findObjectOfType(constructor, objectId);
+  }
+
+  findObjectsOfType<T extends object>(constructor: Constructor<T>) {
+    return this._applicator.findObjectsOfType(constructor);
   }
 }

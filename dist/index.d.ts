@@ -431,7 +431,6 @@ export declare class ObjectChangeApplicator {
 	private readonly _typeGenerators;
 	private readonly _typeSerializers;
 	constructor(settings: ObjectChangeApplicatorSettings);
-	accessor associatedClientConnection: ClientConnection | null;
 	get settings(): FinalObjectChangeApplicatorSettings;
 	get identity(): string;
 	registerGenerator(typeId: string, generator: TypeGenerator): void;
@@ -592,14 +591,36 @@ export declare class ObjectSync {
 	private readonly _applicator;
 	private readonly _settings;
 	constructor(settings: ObjectSyncSettings);
-	get tracker(): ObjectChangeTracker;
-	get applicator(): ObjectChangeApplicator;
 	getMessages(): Map<ClientConnection, Message[]>;
+	applyAsync(messages: Message<any>[], clientConnection: ClientConnection): Promise<{
+		newTrackedObjects: object[];
+		methodExecuteResults: MethodExecuteResult[];
+	}>;
 	applyClientMethodInvokeResults(resultsByClient: Map<ClientConnection, MethodExecuteResult[]>): void;
 	applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<Map<ClientConnection, MethodExecuteResult[]>>;
 	applyMessagesFromClientAsync(clientConnection: ClientConnection, messages: Message[]): Promise<MethodExecuteResult[]>;
 	exchangeMessagesAsync(sendToClientAsync: (client: ClientConnection, messages: Message[]) => Promise<MethodExecuteResult[]>, errorHandler?: (client: ClientConnection, error: any) => void): Promise<void>;
 	exchangeMessagesBulkAsync(sendToClientsAsync: (messagesByClient: Map<ClientConnection, Message[]>) => Promise<Map<ClientConnection, MethodExecuteResult[]>>, errorHandler?: (client: ClientConnection, error: any) => void): Promise<void>;
+	registerSerializer(serializer: TypeSerializer<any> & {
+		typeId: string;
+	}): void;
+	get identity(): string;
+	/** Returns all currently tracked objects. */
+	get allTrackedObjects(): object[];
+	registerClient(settings: ClientConnectionSettings): ClientConnection;
+	/**
+	 * Removes all client-specific state for a client (e.g., when disconnecting).
+	 */
+	removeClient(client: ClientConnection): void;
+	/**
+	 * Begins tracking an object, optionally with settings for object ID and client visibility.
+	 * Throws if objectId is specified for an already-trackable object.
+	 */
+	track<T extends object>(target: T, trackSettings?: TrackSettings): void;
+	untrack<T extends object>(target: T): void;
+	registerGenerator(typeId: string, generator: TypeGenerator): void;
+	findObjectOfType<T extends object>(constructor: Constructor<T>, objectId?: unknown): T | null;
+	findObjectsOfType<T extends object>(constructor: Constructor<T>): number | T[];
 }
 
 export {};

@@ -1,13 +1,6 @@
 var __defProp = Object.defineProperty;
-var __typeError = (msg) => {
-  throw TypeError(msg);
-};
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
-var __accessCheck = (obj, member, msg) => member.has(obj) || __typeError("Cannot " + msg);
-var __privateGet = (obj, member, getter) => (__accessCheck(obj, member, "read from private field"), getter ? getter.call(obj) : member.get(obj));
-var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot add the same private member more than once") : member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
-var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 
 // build/shared/decorators.js
 Symbol.metadata ?? (Symbol.metadata = Symbol("metadata"));
@@ -108,7 +101,6 @@ function isGeneratorTargetGenerator(value) {
   debugger;
   return true;
 }
-var _associatedClientConnection_accessor_storage;
 var ObjectChangeApplicator = class {
   constructor(settings) {
     __publicField(this, "_trackedObjectPool");
@@ -117,19 +109,12 @@ var ObjectChangeApplicator = class {
     __publicField(this, "_settings");
     __publicField(this, "_typeGenerators");
     __publicField(this, "_typeSerializers");
-    __privateAdd(this, _associatedClientConnection_accessor_storage, null);
     this._settings = {
       identity: settings.identity
     };
     this._trackedObjectPool = settings.objectPool;
     this._typeSerializers = settings.typeSerializers;
     this._typeGenerators = settings.typeGenerators;
-  }
-  get associatedClientConnection() {
-    return __privateGet(this, _associatedClientConnection_accessor_storage);
-  }
-  set associatedClientConnection(value) {
-    __privateSet(this, _associatedClientConnection_accessor_storage, value);
   }
   get settings() {
     return this._settings;
@@ -401,7 +386,6 @@ var ObjectChangeApplicator = class {
       return new generator.type(value);
   }
 };
-_associatedClientConnection_accessor_storage = new WeakMap();
 function isDeleteObjectMessage(change) {
   return change.type === "delete";
 }
@@ -1815,14 +1799,17 @@ var ObjectSync = class {
       ...this._settings
     });
   }
-  get tracker() {
-    return this._tracker;
-  }
-  get applicator() {
-    return this._applicator;
-  }
+  // get tracker(): ObjectChangeTracker {
+  //   return this._tracker;
+  // }
+  // get applicator(): ObjectChangeApplicator {
+  //   return this._applicator;
+  // }
   getMessages() {
     return this._tracker.getMessages();
+  }
+  applyAsync(messages, clientConnection) {
+    return this._applicator.applyAsync(messages, clientConnection);
   }
   applyClientMethodInvokeResults(resultsByClient) {
     for (const [clientToken, results] of resultsByClient) {
@@ -1885,6 +1872,46 @@ var ObjectSync = class {
         }
       }
     }
+  }
+  // shorthands for the tracker and applicator
+  registerSerializer(serializer) {
+    this._tracker.registerSerializer(serializer);
+  }
+  get identity() {
+    return this._settings.identity;
+  }
+  /** Returns all currently tracked objects. */
+  get allTrackedObjects() {
+    return this._tracker.allTrackedObjects;
+  }
+  registerClient(settings) {
+    return this._tracker.registerClient(settings);
+  }
+  /**
+   * Removes all client-specific state for a client (e.g., when disconnecting).
+   */
+  removeClient(client) {
+    this._tracker.removeClient(client);
+  }
+  /**
+   * Begins tracking an object, optionally with settings for object ID and client visibility.
+   * Throws if objectId is specified for an already-trackable object.
+   */
+  track(target, trackSettings) {
+    this._tracker.track(target, trackSettings);
+  }
+  untrack(target) {
+    this._tracker.untrack(target);
+  }
+  //// Applicator shorthands
+  registerGenerator(typeId, generator) {
+    this._applicator.registerGenerator(typeId, generator);
+  }
+  findObjectOfType(constructor, objectId) {
+    return this._applicator.findObjectOfType(constructor, objectId);
+  }
+  findObjectsOfType(constructor) {
+    return this._applicator.findObjectsOfType(constructor);
   }
 };
 export {

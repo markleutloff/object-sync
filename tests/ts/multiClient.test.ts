@@ -55,15 +55,15 @@ describe("ObjectSync multiple clients", () => {
       };
       const clientObjectSync = new ObjectSync(clientSettings);
       const result = clientObjectSync as ObjectSyncAndClientConnection;
-      result.hostClientConnection = clientObjectSync.tracker.registerClient({ identity: "host" });
+      result.hostClientConnection = clientObjectSync.registerClient({ identity: "host" });
 
-      const clientConnectionForHost = hostObjectSync.tracker.registerClient({ identity: clientSettings.identity });
+      const clientConnectionForHost = hostObjectSync.registerClient({ identity: clientSettings.identity });
       clientObjectSyncs.set(clientConnectionForHost, result);
       return result;
     }
 
     hostRoot = new Root();
-    hostObjectSync.tracker.track(hostRoot);
+    hostObjectSync.track(hostRoot);
   });
 
   it("should report creation to clients", async () => {
@@ -71,7 +71,7 @@ describe("ObjectSync multiple clients", () => {
     await exchangeMessagesAsync();
 
     for (const clientObjectSync of clientObjectSyncs.values()) {
-      const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+      const clientRoot = clientObjectSync.findObjectOfType(Root)!;
       assert.notStrictEqual(clientRoot, hostRoot);
       assert.strictEqual(clientRoot.value, hostRoot.value);
     }

@@ -83,8 +83,6 @@ export class ObjectChangeApplicator {
     this._typeGenerators = settings.typeGenerators;
   }
 
-  accessor associatedClientConnection: ClientConnection | null = null;
-
   get settings(): FinalObjectChangeApplicatorSettings {
     return this._settings;
   }

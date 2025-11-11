@@ -28,19 +28,19 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     hostObjectSync = new ObjectSync(hostSettings);
     clientObjectSync = new ObjectSync(clientSettings);
 
-    clientObjectSyncClientConnection = hostObjectSync.tracker.registerClient({ identity: "client" });
-    hostObjectSyncClientConnection = clientObjectSync.tracker.registerClient({ identity: "host" });
+    clientObjectSyncClientConnection = hostObjectSync.registerClient({ identity: "client" });
+    hostObjectSyncClientConnection = clientObjectSync.registerClient({ identity: "host" });
 
     alpha = new SyncableObservableArray<string>(["init1", "init2"]);
-    hostObjectSync.tracker.track(alpha);
+    hostObjectSync.track(alpha);
 
     await transmitMessages();
-    alphaClient = clientObjectSync.applicator.findObjectOfType(SyncableObservableArray<string>)!;
+    alphaClient = clientObjectSync.findObjectOfType(SyncableObservableArray<string>)!;
   });
 
   async function transmitMessages() {
-    const changeMessages = hostObjectSync.tracker.getMessages().get(clientObjectSyncClientConnection)!;
-    await clientObjectSync.applicator.applyAsync(changeMessages, hostObjectSyncClientConnection);
+    const changeMessages = hostObjectSync.getMessages().get(clientObjectSyncClientConnection)!;
+    await clientObjectSync.applyAsync(changeMessages, hostObjectSyncClientConnection);
   }
 
   it("should report new items", async () => {

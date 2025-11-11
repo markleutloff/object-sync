@@ -36,7 +36,7 @@ function createWorker(hostSync: ObjectSync, id: number): ClientWorker {
   const workerPath = new URL("./worker.js", import.meta.url);
   const worker = new Worker(workerPath);
 
-  const clientToken = hostSync.tracker.registerClient({
+  const clientToken = hostSync.registerClient({
     identity: "client" + id,
   });
 
@@ -94,7 +94,7 @@ describe("ObjectSync with worker threads", () => {
 
     hostObjectSync = new ObjectSync(hostSettings);
     hostRoot = new Root();
-    hostObjectSync.tracker.track(hostRoot);
+    hostObjectSync.track(hostRoot);
 
     for (let i = 0; i < 3; i++) {
       const clientWorker = createWorker(hostObjectSync, i);

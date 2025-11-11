@@ -90,25 +90,25 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     hostObjectSync = new ObjectSync(hostSettings);
     clientObjectSync = new ObjectSync(clientSettings);
 
-    clientObjectSyncClientConnection = hostObjectSync.tracker.registerClient({ identity: "client" });
-    hostObjectSyncClientConnection = clientObjectSync.tracker.registerClient({ identity: "host" });
+    clientObjectSyncClientConnection = hostObjectSync.registerClient({ identity: "client" });
+    hostObjectSyncClientConnection = clientObjectSync.registerClient({ identity: "host" });
 
     hostRoot = new Root();
-    hostObjectSync.tracker.track(hostRoot);
+    hostObjectSync.track(hostRoot);
   });
 
   it("should report creation to client", async () => {
     hostRoot.value = 42;
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
 
-    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
     assert.notStrictEqual(clientRoot, hostRoot);
     assert.strictEqual(clientRoot.value, hostRoot.value);
   });
 
   it("should report changes to client", async () => {
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
-    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
 
     assert.strictEqual(clientRoot.value, hostRoot.value);
 
@@ -119,7 +119,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 
   it("should execute methods on client", async () => {
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
-    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
 
     const invokeArgument = 55;
     const expectedHostResult = invokeArgument + invokeArgument;
@@ -137,7 +137,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 
   it("should send anything to the host", async () => {
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
-    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
 
     const oldHostValue = hostRoot.value;
     clientRoot.value = 77;
@@ -150,7 +150,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     hostRoot.testClass = new SerializableClass(123);
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
 
-    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
     assert.notStrictEqual(clientRoot.testClass, hostRoot.testClass);
     assert.strictEqual(clientRoot.testClass!.value, hostRoot.testClass!.value);
   });
@@ -160,7 +160,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     hostRoot.syncAsClientRoot = true;
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
 
-    const clientRoot = clientObjectSync.applicator.findObjectOfType(ClientRoot)!;
+    const clientRoot = clientObjectSync.findObjectOfType(ClientRoot)!;
     assert.notStrictEqual(clientRoot, hostRoot);
     assert.strictEqual(clientRoot.value, hostRoot.value);
   });
@@ -170,7 +170,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     hostRoot.allowValueMutation = true;
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
 
-    const clientRoot = clientObjectSync.applicator.findObjectOfType(Root)!;
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
     assert.notStrictEqual(clientRoot.value, hostRoot.value);
   });
 });

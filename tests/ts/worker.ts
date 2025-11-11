@@ -15,7 +15,7 @@ class Root {
 }
 
 const clientSync = new ObjectSync({ identity: "client", typeGenerators: [Root] });
-const clientTokenFromHost = clientSync.tracker.registerClient({
+const clientTokenFromHost = clientSync.registerClient({
   identity: "host",
 });
 
