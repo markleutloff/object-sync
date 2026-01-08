@@ -95,8 +95,6 @@ for (let i = 0; i < 3; i++) {
 
 ### 3. Array Synchronization
 
-hostSync.track(alpha);
-
 Synchronize changes to arrays and observable arrays between host and client.
 
 ```typescript

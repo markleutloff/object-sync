@@ -2,7 +2,7 @@ import { TypeSerializer } from "../applicator/applicator.js";
 import { ChangeObjectMessage, CreateObjectMessage, DeleteObjectMessage, ExecuteObjectMessage, isPropertyInfo, Message, MethodExecuteResult, PropertyInfo, TrackedObjectPool } from "../shared/index.js";
 import { getHostObjectInfo } from "../shared/objectSyncMetaInfo.js";
 import { Constructor, forEachIterable, OneOrMany } from "../shared/types.js";
-import { ClientFilter, ChangeTrackerObjectInfo, ServerObjectSyncMetaInfoCreateSettings } from "./trackerObjectInfo.js";
+import { ClientFilter, ChangeTrackerObjectInfo, ChangeTrackerObjectSyncMetaInfoCreateSettings } from "./trackerObjectInfo.js";
 
 export type TrackSettings = {
   /**
@@ -35,11 +35,23 @@ type FinalObjectChangeTrackerSettings = {
   identity: string;
 };
 
+/**
+ * Settings for a client connection.
+ */
 export type ClientConnectionSettings = {
+  /**
+   * Identity of the client (e.g., "host", "client1", etc.).
+   */
   identity: string;
 };
 
+/**
+ * Representation of a connection to a client.
+ */
 export type ClientConnection = {
+  /**
+   * Identity of the client (e.g., "host", "client1", etc.).
+   */
   identity: string;
 };
 
@@ -142,7 +154,7 @@ export class ObjectChangeTracker {
 
     let hostObjectInfo: ChangeTrackerObjectInfo<T> | null = getHostObjectInfo(target);
     if (!hostObjectInfo) {
-      const creationSettings: ServerObjectSyncMetaInfoCreateSettings<T> = {
+      const creationSettings: ChangeTrackerObjectSyncMetaInfoCreateSettings<T> = {
         objectId: trackSettings?.objectId,
         isRoot,
         object: target,
@@ -405,7 +417,13 @@ export class ObjectChangeTracker {
     const serializer = this._serializers.get(value.constructor as Constructor);
     if (!serializer) return null;
     return {
-      value: serializer.serialize ? serializer.serialize(value) : "toJSON" in value && typeof value.toJSON === "function" ? value.toJSON() : "toValue" in value && typeof value.toValue === "function" ? value.toValue() : value,
+      value: serializer.serialize
+        ? serializer.serialize(value)
+        : "toJSON" in value && typeof value.toJSON === "function"
+        ? value.toJSON()
+        : "toValue" in value && typeof value.toValue === "function"
+        ? value.toValue()
+        : value,
       typeId: serializer.typeId,
     };
   }

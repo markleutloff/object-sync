@@ -1,14 +1,4 @@
-import {
-  PropertyInfo,
-  CreateObjectMessage,
-  PropertyInfos,
-  ChangeObjectMessage,
-  Message,
-  DeleteObjectMessage,
-  ExecuteObjectMessage,
-  isPropertyInfoSymbol,
-  MethodExecuteResult,
-} from "../shared/index.js";
+import { PropertyInfo, CreateObjectMessage, PropertyInfos, ChangeObjectMessage, DeleteObjectMessage, ExecuteObjectMessage, isPropertyInfoSymbol, MethodExecuteResult } from "../shared/index.js";
 import { beforeSendObjectToClient, beforeSendPropertyToClient, beforeExecuteOnClient, getTrackableTypeInfo, nothing } from "./decorators.js";
 import { ClientConnection, ObjectChangeTracker } from "./tracker.js";
 import { ensureObjectSyncMetaInfo, getObjectSyncMetaInfo, ObjectSyncMetaInfo, ObjectSyncMetaInfoCreateSettings } from "../shared/objectSyncMetaInfo.js";
@@ -16,12 +6,7 @@ import { invokeOnConvertedToTrackable, invokeOnTick } from "./interfaces.js";
 import { Constructor, hasInIterable, OneOrMany, toIterable } from "../shared/types.js";
 import { ObjectInfoBase } from "../shared/objectInfoBase.js";
 
-export type AdditionalHostPropertyInfo = {
-  hasPendingChanges: boolean;
-};
-
-export type HostChangeObjectMessage<T extends object = object> = ChangeObjectMessage<T, AdditionalHostPropertyInfo>;
-export type HostMessage<T extends object = object> = Message<T, AdditionalHostPropertyInfo>;
+type PropertyChanges<T> = { [K in keyof T]?: { value: T[K]; hasPendingChanges: boolean } };
 
 type TResult<T, K extends keyof T> = T[K] extends (...args: any[]) => any ? ReturnType<T[K]> : never;
 
@@ -58,7 +43,7 @@ function isForClientConnection(clientConnection: ClientConnection, filter: Clien
   return filter.isExclusive === (hasDesignation && hasClientConnection);
 }
 
-export type ServerObjectSyncMetaInfoCreateSettings<T extends object> = ObjectSyncMetaInfoCreateSettings<T> & {
+export type ChangeTrackerObjectSyncMetaInfoCreateSettings<T extends object> = ObjectSyncMetaInfoCreateSettings<T> & {
   isRoot: boolean;
   objectIdPrefix: string;
   owner: ObjectChangeTracker;
@@ -86,7 +71,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
    * Ensures an object is auto-trackable, returning a TrackableObject if possible.
    * If the object is already trackable, returns the existing wrapper.
    */
-  static create<T extends object>(settings: ServerObjectSyncMetaInfoCreateSettings<T>): ChangeTrackerObjectInfo<T> | null {
+  static create<T extends object>(settings: ChangeTrackerObjectSyncMetaInfoCreateSettings<T>): ChangeTrackerObjectInfo<T> | null {
     if (!settings.object || typeof settings.object !== "object") return null;
 
     const trackableTypeInfo = getTrackableTypeInfo((settings.object as any).constructor);
@@ -108,7 +93,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   }
 
   /** Holds the current set of property changes for this object. */
-  private readonly _changeSet: HostChangeObjectMessage<T>;
+  private readonly _changeSet: PropertyChanges<T> = {};
   /** Holds pending method invocation messages for this object. */
   private readonly _methodInvokeCalls: ExecuteObjectMessage<T>[] = [];
   private readonly _pendingMethodInvokeCalls: Map<unknown, PendingMethodCall> = new Map();
@@ -124,12 +109,6 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
    */
   private constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, private readonly _host: ObjectChangeTracker, private _isRootObject: boolean, private readonly _objectIdPrefix: string) {
     super(objectSyncMetaInfo);
-
-    this._changeSet = {
-      type: "change",
-      objectId: this.objectId,
-      properties: {},
-    };
   }
 
   get host() {
@@ -147,8 +126,8 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
     this._isRootObject = value;
   }
 
-  get properties(): PropertyInfos<T, AdditionalHostPropertyInfo> {
-    return this._changeSet.properties;
+  get properties() {
+    return this._changeSet;
   }
 
   /**
@@ -183,21 +162,23 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
    * Records a property change, converting values to trackable references if needed.
    */
   onPropertyChanged(key: keyof T, value: T[keyof T]) {
-    let current = this._changeSet.properties[key];
+    let current = this._changeSet[key];
     if (!current) {
-      current = { hasPendingChanges: true, [isPropertyInfoSymbol]: true };
-      this._changeSet.properties[key] = current;
-    } else if (current.value === value) {
+      current = { hasPendingChanges: true, value };
+      this._changeSet[key] = current;
       return;
     }
+    if (current.value === value) return;
 
-    this.convertToTrackableObjectReference(value as any);
-
-    const metaInfo = getObjectSyncMetaInfo(value as object);
-    const objectId: unknown = metaInfo?.objectId;
     current.value = value as any;
-    current.objectId = objectId;
     current.hasPendingChanges = true;
+
+    // this.convertToTrackableObjectReference(value as any);
+
+    // const metaInfo = getObjectSyncMetaInfo(value as object);
+    // const objectId: unknown = metaInfo?.objectId;
+    // current.value = value as any;
+    // current.hasPendingChanges = true;
   }
 
   createPropertyInfo(value: any): PropertyInfo<T, keyof T> {
@@ -214,19 +195,12 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   /**
    * Records a method execution for this object, converting arguments to trackable references if needed.
    */
-  onMethodExecute(method: keyof T, args: any[]) {
-    const parameters: PropertyInfos<any, any>[] = [];
-
-    args.forEach((arg, index) => {
-      const paramInfo = this.createPropertyInfo(arg);
-      parameters.push(paramInfo);
-    });
-
+  onMethodExecute(method: keyof T, parameters: any[]) {
     const message: ExecuteObjectMessage<T> = {
       type: "execute",
       id: nextInvokeId++,
       objectId: this.objectId,
-      parameters: parameters as any,
+      parameters,
       method: method as any,
     };
 
@@ -383,9 +357,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   getExecuteMessages(client: ClientConnection): ExecuteObjectMessage<T>[] {
     const result: ExecuteObjectMessage<T>[] = [];
     for (const methodExecuteCall of this._methodInvokeCalls) {
-      const args = methodExecuteCall.parameters.map((paramInfo) => {
-        return paramInfo.value;
-      });
+      const args = methodExecuteCall.parameters.slice();
       if (beforeExecuteOnClient(this.object.constructor as Constructor, this.object, methodExecuteCall.method, args, client) === false) {
         continue;
       }
@@ -405,19 +377,14 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
    */
   private getProperties(client: ClientConnection, includeChangedOnly: boolean): PropertyInfos<T> {
     const result: PropertyInfos<T> = {};
-    Object.keys(this._changeSet.properties).forEach((key) => {
-      let propertyInfo = this._changeSet.properties[key as keyof T]!;
-      if (includeChangedOnly && !propertyInfo.hasPendingChanges) return;
+    Object.keys(this._changeSet).forEach((key) => {
+      let propertyStateInfo = this._changeSet[key as keyof T]!;
+      if (includeChangedOnly && !propertyStateInfo.hasPendingChanges) return;
 
-      const finalValue = beforeSendPropertyToClient(this.object.constructor as Constructor, this.object, key, propertyInfo.value, client);
+      const finalValue = beforeSendPropertyToClient(this.object.constructor as Constructor, this.object, key, propertyStateInfo.value, client);
       if (finalValue === nothing) return;
 
-      if (finalValue !== propertyInfo.value) {
-        propertyInfo = this.createPropertyInfo(finalValue) as any;
-
-        const metaInfo = getObjectSyncMetaInfo(finalValue as object);
-        propertyInfo.objectId = metaInfo?.objectId;
-      }
+      const propertyInfo = this.createPropertyInfo(finalValue);
 
       const clientPropertyInfo = this.serializePropertyInfo(key as keyof T, propertyInfo as PropertyInfo<T, keyof T>, client);
       if (clientPropertyInfo) result[key as keyof T] = clientPropertyInfo;
@@ -457,8 +424,8 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
    * Resets the hasPendingChanges flag for all properties and clears pending method calls.
    */
   tick(): void {
-    Object.keys(this._changeSet.properties).forEach((key) => {
-      const propertyInfo = this._changeSet.properties[key as keyof T]!;
+    Object.keys(this._changeSet).forEach((key) => {
+      const propertyInfo = this._changeSet[key as keyof T]!;
       propertyInfo.hasPendingChanges = false;
     });
     this._methodInvokeCalls.length = 0;

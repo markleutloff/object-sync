@@ -1,6 +1,6 @@
 import type { ClientConnection } from "../tracker/tracker.js";
-import { ChangeObjectMessage, CreateObjectMessage } from "../shared/messages.js";
-import { ObjectChangeApplicator } from "./applicator.js";
+import type { ChangeObjectMessage, CreateObjectMessage } from "../shared/messages.js";
+import type { ObjectChangeApplicator } from "./applicator.js";
 
 export const onCreated = Symbol("onCreated");
 export const onUpdated = Symbol("onUpdated");

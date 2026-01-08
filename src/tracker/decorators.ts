@@ -24,6 +24,15 @@ type TrackedPropertySettingsBase<T> = {
    * @param clientConnection The clientConnection from which the changes came from.
    */
   canApply?<TKey extends keyof T & string>(object: T, key: TKey, clientConnection: ClientConnection): boolean;
+
+  /**
+   * Defines how the property/method should be tracked/applied.
+   * - "trackAndApply": Changes to the property/method are tracked and applied (thats the default).
+   * - "trackOnly": Changes to the property/method are only tracked, not applied.
+   * - "applyOnly": Changes to the property/method are only applied, not tracked.
+   * - "none": Changes to the property/method are neither tracked nor applied.
+   */
+  mode?: "trackAndApply" | "trackOnly" | "applyOnly" | "none";
 };
 
 type TrackedPropertySettings<T> = TrackedPropertySettingsBase<T> & {
@@ -55,9 +64,7 @@ type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBase<T> & 
    * @param key The name of the method which is being sent.
    * @param clientConnection The client connection to which the value is being sent.
    */
-  beforeExecuteOnClient?<TKey extends keyof T & string>(object: T, methodName: TKey, args: 
-    T[TKey] extends (...args: infer P) => any ? P : never, 
-    clientConnection: ClientConnection): boolean;
+  beforeExecuteOnClient?<TKey extends keyof T & string>(object: T, methodName: TKey, args: T[TKey] extends (...args: infer P) => any ? P : never, clientConnection: ClientConnection): boolean;
 };
 
 type TrackedPropertyInfo<T> = TrackedPropertySettings<T> & {
@@ -132,7 +139,7 @@ export function syncProperty<This, Return>(settings?: TrackedPropertySettings<Th
 
         target.set.call(this, value);
 
-        if (isBeeingApplied) return;
+        if (isBeeingApplied || propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly") return;
 
         const host = getObjectSyncMetaInfo(this as any)?.host;
 
@@ -168,7 +175,7 @@ export function syncMethod<This extends object, Return>(settings?: TrackedMethod
 
       const result = originalMethod.apply(this, args);
 
-      if (isBeeingApplied) return result;
+      if (isBeeingApplied || methodInfo.mode === "none" || methodInfo.mode === "applyOnly") return result;
 
       const hostInfo = getObjectSyncMetaInfo(this)?.host;
       if (hostInfo && checkCanTrackPropertyInfo(methodInfo, this, methodName, hostInfo)) {
@@ -263,16 +270,12 @@ export function getSyncMethodInfo(constructor: Constructor, propertyKey: string)
 
 export function checkCanApplyProperty(constructor: Constructor, object: object, propertyKey: string, isMethod: boolean, clientConnection: ClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return false;
-  }
+  if (!constructorInfo) return false;
   const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
-  if (!propertyInfo) {
-    return false;
-  }
-  if (propertyInfo.canApply?.(object, propertyKey, clientConnection) === false) {
-    return false;
-  }
+  if (!propertyInfo) return false;
+
+  if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly") return;
+  if (propertyInfo.canApply?.(object, propertyKey, clientConnection) === false) return false;
   return true;
 }
 

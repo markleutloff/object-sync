@@ -1,5 +1,5 @@
-import { checkCanApplyProperty, getSyncMethodInfo, getSyncPropertyInfo, getTrackableTypeInfo } from "../tracker/decorators.js";
-import {
+import { checkCanApplyProperty, getSyncMethodInfo, getSyncPropertyInfo } from "../tracker/decorators.js";
+import type {
   ChangeObjectMessage,
   Message,
   CreateObjectMessage,
@@ -23,15 +23,35 @@ export type TypeGenerator = Constructor | TrackableTargetGenerator;
 export type TrackableTargetGenerator<T = any> = (client: ObjectChangeApplicator, properties: ResolvablePropertyInfos<T>, objectId: unknown, typeId: string) => T;
 
 export type TypeSerializer<T> = {
+  /**
+   * The type ID of the type being serialized/deserialized.
+   */
   typeId?: string;
+
+  /**
+   * The constructor of the type being serialized/deserialized.
+   * When no function to serialize/deserialize is provided, this constructor will be used for deserialization and instance.toJSON()/toValue() for serialization.
+   */
   type: Constructor<T>;
 } & (
   | {
+      /**
+       * Function to deserialize a value.
+       */
       deserialize: undefined;
+      /**
+       * Function to serialize a value.
+       */
       serialize: undefined;
     }
   | {
+      /**
+       * Function to deserialize a value.
+       */
       deserialize(value: any): T;
+      /**
+       * Function to serialize a value.
+       */
       serialize(value: T): any;
     }
 );

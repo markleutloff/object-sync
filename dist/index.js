@@ -171,10 +171,6 @@ var ObjectChangeApplicator = class {
     this._currentClientApplyResult = { newTrackedObjects: [], methodExecuteResults: [] };
     return result;
   }
-  /**
-   * Resolves a property value, returning the tracked object if objectId is present, or the value otherwise.
-   * If the object is not yet tracked, attempts to create it from pending messages.
-   */
   getPropertyValue(property, clientConnection) {
     const { objectId, value, typeId } = property;
     if (typeId) {
@@ -417,7 +413,7 @@ function syncProperty(settings) {
         const isBeeingApplied = propertyInfo.isBeeingApplied;
         propertyInfo.isBeeingApplied = false;
         target.set.call(this, value);
-        if (isBeeingApplied)
+        if (isBeeingApplied || propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly")
           return;
         const host = getObjectSyncMetaInfo(this)?.host;
         if (host && checkCanTrackPropertyInfo(propertyInfo, this, propertyName, host)) {
@@ -443,7 +439,7 @@ function syncMethod(settings) {
       const isBeeingApplied = methodInfo.isBeeingApplied;
       methodInfo.isBeeingApplied = false;
       const result = originalMethod.apply(this, args);
-      if (isBeeingApplied)
+      if (isBeeingApplied || methodInfo.mode === "none" || methodInfo.mode === "applyOnly")
         return result;
       const hostInfo = getObjectSyncMetaInfo(this)?.host;
       if (hostInfo && checkCanTrackPropertyInfo(methodInfo, this, methodName, hostInfo)) {
@@ -518,25 +514,16 @@ function getSyncMethodInfo(constructor, propertyKey) {
 }
 function checkCanApplyProperty(constructor, object, propertyKey, isMethod, clientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
+  if (!constructorInfo)
     return false;
-  }
   const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
-  if (!propertyInfo) {
+  if (!propertyInfo)
     return false;
-  }
-  if (propertyInfo.canApply?.(object, propertyKey, clientConnection) === false) {
+  if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly")
+    return;
+  if (propertyInfo.canApply?.(object, propertyKey, clientConnection) === false)
     return false;
-  }
   return true;
-}
-function checkCanTrackProperty(constructor, object, propertyKey, isMethod, host) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return false;
-  }
-  const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
-  return checkCanTrackPropertyInfo(propertyInfo, object, propertyKey, host);
 }
 function checkCanTrackPropertyInfo(propertyInfo, object, propertyKey, host) {
   if (!propertyInfo) {
@@ -910,7 +897,6 @@ var SyncableArray = (() => {
       }
       return arr;
     }
-    // toJson and toValue
     toJSON() {
       return this._values;
     }
@@ -970,12 +956,6 @@ var EventEmitter = class {
       callback(...args);
     }
   }
-  // protected emit2<Event extends keyof Events>(event: Event, ...args: Parameters<Events[Event]>): void {
-  //   if (!this._events[event as string]) return;
-  //   for (const callback of this._events[event as string]) {
-  //     callback(...args);
-  //   }
-  // }
   onEventListenerAdded(event, callback) {
   }
   onEventListenerRemoved(event, callback) {
@@ -1103,37 +1083,21 @@ function isForClientConnection(clientConnection, filter) {
   return filter.isExclusive === (hasDesignation && hasClientConnection);
 }
 var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoBase {
-  /**
-   * Constructs a TrackableObject with a typeId and optional objectId.
-   */
   constructor(objectSyncMetaInfo, _host, _isRootObject, _objectIdPrefix) {
     super(objectSyncMetaInfo);
     __publicField(this, "_host");
     __publicField(this, "_isRootObject");
     __publicField(this, "_objectIdPrefix");
-    /** Holds the current set of property changes for this object. */
-    __publicField(this, "_changeSet");
-    /** Holds pending method invocation messages for this object. */
+    __publicField(this, "_changeSet", {});
     __publicField(this, "_methodInvokeCalls", []);
     __publicField(this, "_pendingMethodInvokeCalls", /* @__PURE__ */ new Map());
-    /** Holds client filter settings for restricting visibility. */
     __publicField(this, "_clientFilters", null);
-    /** Holds the set of clients which know about this. */
     __publicField(this, "_clients", /* @__PURE__ */ new Set());
     __publicField(this, "_lastMethodCallResult", null);
     this._host = _host;
     this._isRootObject = _isRootObject;
     this._objectIdPrefix = _objectIdPrefix;
-    this._changeSet = {
-      type: "change",
-      objectId: this.objectId,
-      properties: {}
-    };
   }
-  /**
-   * Ensures an object is auto-trackable, returning a TrackableObject if possible.
-   * If the object is already trackable, returns the existing wrapper.
-   */
   static create(settings) {
     if (!settings.object || typeof settings.object !== "object")
       return null;
@@ -1166,26 +1130,17 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
     this._isRootObject = value;
   }
   get properties() {
-    return this._changeSet.properties;
+    return this._changeSet;
   }
-  /**
-   * Determines if this object is visible to a given client based on filters.
-   */
   isForClient(client) {
     if (!this._clientFilters)
       return true;
     const filter = this._clientFilters;
     return isForClientConnection(client, filter);
   }
-  /**
-   * Removes all client restrictions, making the object visible to all clients.
-   */
   removeClientRestrictions() {
     this._clientFilters = null;
   }
-  /**
-   * Restricts the object to a set of clients (inclusive or exclusive).
-   */
   setClientRestriction(filter) {
     this._clientFilters = {
       clients: filter.clients ? toIterable(filter.clients, true) : void 0,
@@ -1193,22 +1148,16 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
       isExclusive: filter.isExclusive ?? true
     };
   }
-  /**
-   * Records a property change, converting values to trackable references if needed.
-   */
   onPropertyChanged(key, value) {
-    let current = this._changeSet.properties[key];
+    let current = this._changeSet[key];
     if (!current) {
-      current = { hasPendingChanges: true, [isPropertyInfoSymbol]: true };
-      this._changeSet.properties[key] = current;
-    } else if (current.value === value) {
+      current = { hasPendingChanges: true, value };
+      this._changeSet[key] = current;
       return;
     }
-    this.convertToTrackableObjectReference(value);
-    const metaInfo = getObjectSyncMetaInfo(value);
-    const objectId = metaInfo?.objectId;
+    if (current.value === value)
+      return;
     current.value = value;
-    current.objectId = objectId;
     current.hasPendingChanges = true;
   }
   createPropertyInfo(value) {
@@ -1220,15 +1169,7 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
     };
     return paramInfo;
   }
-  /**
-   * Records a method execution for this object, converting arguments to trackable references if needed.
-   */
-  onMethodExecute(method, args) {
-    const parameters = [];
-    args.forEach((arg, index) => {
-      const paramInfo = this.createPropertyInfo(arg);
-      parameters.push(paramInfo);
-    });
+  onMethodExecute(method, parameters) {
     const message = {
       type: "execute",
       id: nextInvokeId++,
@@ -1286,9 +1227,6 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
       pendingCall.onRemainingClientsResolved(pendingCall.resultByClient);
     }
   }
-  /**
-   * Converts a value to a trackable object reference if possible.
-   */
   convertToTrackableObjectReference(target) {
     if (target && typeof target === "object") {
       return _ChangeTrackerObjectInfo.create({
@@ -1300,10 +1238,6 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
     }
     return null;
   }
-  /**
-   * Generates a create message for this object for a given client, applying any view-based typeId overrides.
-   * Returns null if the object should not be sent to the client.
-   */
   getCreateMessage(client) {
     const typeIdOrNothing = beforeSendObjectToClient(this.object.constructor, this.object, this.typeId, client);
     if (typeIdOrNothing === nothing)
@@ -1317,9 +1251,6 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
     };
     return result;
   }
-  /**
-   * Generates a delete message for this object.
-   */
   getDeleteMessage() {
     const result = {
       type: "delete",
@@ -1347,10 +1278,6 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
       });
     });
   }
-  /**
-   * Generates a change message for this object for a given client, including only changed properties.
-   * Returns null if there are no changes.
-   */
   getChangeMessage(client) {
     const properties = this.getProperties(client, true);
     if (Object.keys(properties).length === 0)
@@ -1362,15 +1289,10 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
     };
     return result;
   }
-  /**
-   * Returns all pending execute messages for this object.
-   */
   getExecuteMessages(client) {
     const result = [];
     for (const methodExecuteCall of this._methodInvokeCalls) {
-      const args = methodExecuteCall.parameters.map((paramInfo) => {
-        return paramInfo.value;
-      });
+      const args = methodExecuteCall.parameters.slice();
       if (beforeExecuteOnClient(this.object.constructor, this.object, methodExecuteCall.method, args, client) === false) {
         continue;
       }
@@ -1381,24 +1303,16 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
     }
     return result;
   }
-  /**
-   * Gathers property info for this object for a given client, applying any view-based property overrides.
-   * If includeChangedOnly is true, only changed properties are included.
-   */
   getProperties(client, includeChangedOnly) {
     const result = {};
-    Object.keys(this._changeSet.properties).forEach((key) => {
-      let propertyInfo = this._changeSet.properties[key];
-      if (includeChangedOnly && !propertyInfo.hasPendingChanges)
+    Object.keys(this._changeSet).forEach((key) => {
+      let propertyStateInfo = this._changeSet[key];
+      if (includeChangedOnly && !propertyStateInfo.hasPendingChanges)
         return;
-      const finalValue = beforeSendPropertyToClient(this.object.constructor, this.object, key, propertyInfo.value, client);
+      const finalValue = beforeSendPropertyToClient(this.object.constructor, this.object, key, propertyStateInfo.value, client);
       if (finalValue === nothing)
         return;
-      if (finalValue !== propertyInfo.value) {
-        propertyInfo = this.createPropertyInfo(finalValue);
-        const metaInfo = getObjectSyncMetaInfo(finalValue);
-        propertyInfo.objectId = metaInfo?.objectId;
-      }
+      const propertyInfo = this.createPropertyInfo(finalValue);
       const clientPropertyInfo = this.serializePropertyInfo(key, propertyInfo, client);
       if (clientPropertyInfo)
         result[key] = clientPropertyInfo;
@@ -1428,12 +1342,9 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
   serializeValue(value) {
     return this.host.serializeValue(value);
   }
-  /**
-   * Resets the hasPendingChanges flag for all properties and clears pending method calls.
-   */
   tick() {
-    Object.keys(this._changeSet.properties).forEach((key) => {
-      const propertyInfo = this._changeSet.properties[key];
+    Object.keys(this._changeSet).forEach((key) => {
+      const propertyInfo = this._changeSet[key];
       propertyInfo.hasPendingChanges = false;
     });
     this._methodInvokeCalls.length = 0;
@@ -1444,9 +1355,7 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
 // build/tracker/tracker.js
 var ObjectChangeTracker = class {
   constructor(settings) {
-    /** Pool of all currently tracked objects and their info. */
     __publicField(this, "_trackedObjectPool");
-    /** Maps client IDs to lists of delete messages for objects that have been untracked. */
     __publicField(this, "_untrackedObjectInfosByClient", /* @__PURE__ */ new Map());
     __publicField(this, "_clients", /* @__PURE__ */ new Set());
     __publicField(this, "_serializers", /* @__PURE__ */ new Map());
@@ -1474,7 +1383,6 @@ var ObjectChangeTracker = class {
   get identity() {
     return this._settings.identity;
   }
-  /** Returns all currently tracked objects. */
   get allTrackedObjects() {
     return this._trackedObjectPool.all;
   }
@@ -1483,9 +1391,6 @@ var ObjectChangeTracker = class {
     this._clients.add(clientToken);
     return clientToken;
   }
-  /**
-   * Removes all client-specific state for a client (e.g., when disconnecting).
-   */
   removeClient(client) {
     if (!this._clients.has(client)) {
       throw new Error("Unknown client token");
@@ -1497,22 +1402,12 @@ var ObjectChangeTracker = class {
     this._untrackedObjectInfosByClient.delete(client);
     this._clients.delete(client);
   }
-  /**
-   * Restricts the visibility of a tracked object to a set of clients.
-   * @param obj The object to restrict.
-   * @param clients The client(s) allowed or excluded.
-   * @param isExclusive If true, only the given clients can see the object; otherwise, all except these clients can see it.
-   */
   setClientRestriction(obj, filter) {
     const tracked = getHostObjectInfo(obj);
     if (!tracked)
       throw new Error("Object is not tracked");
     tracked.setClientRestriction(filter);
   }
-  /**
-   * Begins tracking an object, optionally with settings for object ID and client visibility.
-   * Throws if objectId is specified for an already-trackable object.
-   */
   track(target, trackSettings) {
     this.trackInternal(target, trackSettings);
   }
@@ -1560,10 +1455,6 @@ var ObjectChangeTracker = class {
     }
     return hostObjectInfo;
   }
-  /**
-   * Stops tracking an object and queues delete messages for all clients that could see it.
-   * If an object is passed instead of a TrackableObject, it will first be looked up.
-   */
   untrack(target) {
     if (this.untrackInternal(target, true))
       this.removeUnusedObjects();
@@ -1589,11 +1480,6 @@ var ObjectChangeTracker = class {
     });
     return true;
   }
-  /**
-   * For a given message, finds and tracks any nested objects referenced by objectId/value pairs.
-   * Removes the value from the property after tracking.
-   * @returns Array of HostTrackableObjectInfo for any new objects tracked.
-   */
   gatherUntrackedObjectInfos(data) {
     return this.gatherUntrackedObjectInfosFromRaw(data.properties);
   }
@@ -1652,9 +1538,6 @@ var ObjectChangeTracker = class {
       this.tick();
     return result;
   }
-  /**
-   * Internal: Gathers all messages for a client.
-   */
   getMessagesForClientInternal(client) {
     const messages = [];
     let all = this._trackedObjectPool.all;
@@ -1674,10 +1557,6 @@ var ObjectChangeTracker = class {
     });
     return messages;
   }
-  /**
-   * Internal: Adds create/change/execute messages for a tracked object to the outgoing message list for a client.
-   * Also tracks any nested objects referenced in the message.
-   */
   getMessagesForTrackableObjectInfo(syncObject2, client, messages, newTrackableObjects) {
     const hostObjectInfo = getHostObjectInfo(syncObject2);
     if (!hostObjectInfo?.isForClient(client))
@@ -1714,10 +1593,6 @@ var ObjectChangeTracker = class {
       hostObjectInfo?.tick();
     });
   }
-  /**
-   * Removes all tracked objects that are not reachable from any of the provided root objects.
-   * Traverses the object graph starting from the roots and untracks all unreachable objects.
-   */
   removeUnusedObjects() {
     const reachable = /* @__PURE__ */ new Set();
     const stack = [];
@@ -1799,12 +1674,6 @@ var ObjectSync = class {
       ...this._settings
     });
   }
-  // get tracker(): ObjectChangeTracker {
-  //   return this._tracker;
-  // }
-  // get applicator(): ObjectChangeApplicator {
-  //   return this._applicator;
-  // }
   getMessages() {
     return this._tracker.getMessages();
   }
@@ -1873,37 +1742,30 @@ var ObjectSync = class {
       }
     }
   }
-  // shorthands for the tracker and applicator
   registerSerializer(serializer) {
     this._tracker.registerSerializer(serializer);
   }
   get identity() {
     return this._settings.identity;
   }
-  /** Returns all currently tracked objects. */
   get allTrackedObjects() {
     return this._tracker.allTrackedObjects;
   }
   registerClient(settings) {
     return this._tracker.registerClient(settings);
   }
-  /**
-   * Removes all client-specific state for a client (e.g., when disconnecting).
-   */
   removeClient(client) {
     this._tracker.removeClient(client);
   }
-  /**
-   * Begins tracking an object, optionally with settings for object ID and client visibility.
-   * Throws if objectId is specified for an already-trackable object.
-   */
   track(target, trackSettings) {
     this._tracker.track(target, trackSettings);
   }
   untrack(target) {
     this._tracker.untrack(target);
   }
-  //// Applicator shorthands
+  setClientRestriction(obj, filter) {
+    this._tracker.setClientRestriction(obj, filter);
+  }
   registerGenerator(typeId, generator) {
     this._applicator.registerGenerator(typeId, generator);
   }
@@ -1915,7 +1777,6 @@ var ObjectSync = class {
   }
 };
 export {
-  ApplicatorObjectInfo,
   ChangeTrackerObjectInfo,
   ObjectChangeApplicator,
   ObjectChangeTracker,
@@ -1924,28 +1785,10 @@ export {
   SyncableObservableArray,
   TrackedObjectPool,
   allTypeGenerators,
-  beforeExecuteOnClient,
-  beforeSendObjectToClient,
-  beforeSendPropertyToClient,
-  checkCanApplyProperty,
-  checkCanTrackProperty,
-  createObjectId,
-  ensureObjectSyncMetaInfo,
   getClientObjectInfo,
   getHostObjectInfo,
   getObjectSyncMetaInfo,
-  getSyncMethodInfo,
-  getSyncPropertyInfo,
-  getTrackableTypeInfo,
-  invokeOnCreated,
-  invokeOnDelete,
-  invokeOnDeleted,
-  invokeOnUpdateProperty,
-  invokeOnUpdated,
-  isPropertyInfo,
-  isPropertyInfoSymbol,
   nothing,
-  objectSyncSymbol,
   onCreated,
   onDelete,
   onDeleted,

@@ -1,3 +1,58 @@
-export * from "./shared/index.js";
-export * from "./applicator/index.js";
-export * from "./tracker/index.js";
+// export * from "./shared/index.js";
+// export * from "./applicator/index.js";
+// export * from "./tracker/index.js";
+
+export {
+  type ObjectSyncMetaInfoCreateSettings,
+  type MethodExecuteResult,
+  type Message,
+  type ChangeObjectMessage,
+  type CreateObjectMessage,
+  type DeleteObjectMessage,
+  type ExecuteObjectMessage,
+  type ObjectSyncMetaInfo,
+  type ObjectSyncSettings,
+  type ResolvablePropertyInfos,
+  ObjectSync,
+  SyncableArray,
+  SyncableObservableArray,
+  TrackedObjectPool,
+  getHostObjectInfo,
+  getObjectSyncMetaInfo,
+  getClientObjectInfo,
+} from "./shared/index.js";
+export {
+  type ITrackableOnCreated,
+  type ITrackableOnDelete,
+  type ITrackableOnDeleted,
+  type ITrackableOnUpdateProperty,
+  type ITrackableOnUpdated,
+  type TrackableTargetGenerator,
+  type TypeGenerator,
+  type TypeSerializer,
+  ObjectChangeApplicator,
+  allTypeGenerators,
+  onCreated,
+  onDelete,
+  onDeleted,
+  onUpdateProperty,
+  onUpdated,
+  type ObjectChangeApplicatorSettings,
+  type ApplicatorObjectInfo,
+} from "./applicator/index.js";
+export {
+  type ChangeTrackerObjectSyncMetaInfoCreateSettings,
+  type ClientConnection,
+  type ClientConnectionSettings,
+  type ClientFilter,
+  type MethodCallResult,
+  type MethodCallResultByClient,
+  type ObjectChangeTrackerSettings,
+  type TrackSettings,
+  ChangeTrackerObjectInfo,
+  ObjectChangeTracker,
+  nothing,
+  syncMethod,
+  syncObject,
+  syncProperty,
+} from "./tracker/index.js";

@@ -1,6 +1,6 @@
 {
   "name": "simple-object-sync",
-  "version": "1.1.2",
+  "version": "1.1.4",
   "type": "module",
   "repository": {
     "url": "https://github.com/markleutloff/object-sync"
@@ -23,9 +23,10 @@
   "scripts": {
     "watch": "tsc --watch",
     "build:tsc": "tsc",
+    "build:tsc:nocomments": "tsc --project tsconfig.nocomments.json",
     "build:bundle": "node esbuild.config.mjs",
     "build:bundle:dts": "dts-bundle-generator -o dist/index.d.ts src/index.ts",
-    "build": "npm run build:tsc && npm run build:bundle && npm run build:bundle:dts",
+    "build": "npm run build:tsc && npm run build:tsc:nocomments && npm run build:bundle && npm run build:bundle:dts",
     "test:ts:prepare": "tsc --project tests/ts/tsconfig.json",
     "test:ts": "tsx --test tests/ts/*.test.ts",
     "test:ts:objectSync": "tsx --test tests/ts/objectSync.test.ts",
