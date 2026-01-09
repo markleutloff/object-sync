@@ -8,22 +8,41 @@ export const onUpdateProperty = Symbol("onUpdateProperty");
 export const onDelete = Symbol("onDelete");
 export const onDeleted = Symbol("onDeleted");
 
+/**
+ * Interface for objects that need to manually handle creation events.
+ */
 export interface ITrackableOnCreated<T extends object> {
   [onCreated](changes: CreateObjectMessage<T>, client: ObjectChangeApplicator, clientConnection?: ClientConnection): void;
 }
 
+/**
+ * Interface for objects that need to manually handle update events.
+ * This is called after an object has been updated.
+ */
 export interface ITrackableOnUpdated<T extends object> {
   [onUpdated](changes: ChangeObjectMessage<T>, client: ObjectChangeApplicator, clientConnection?: ClientConnection): void;
 }
 
+/**
+ * Interface for objects that need to handle deletion events.
+ * This is called after an object has been deleted.
+ */
 export interface ITrackableOnDeleted {
   [onDeleted](client: ObjectChangeApplicator, clientConnection?: ClientConnection): void;
 }
 
+/**
+ * Interface for objects that need to handle deletion requests.
+ * This is called before an object is deleted, allowing for cleanup or vetoing the deletion.
+ */
 export interface ITrackableOnDelete {
   [onDelete](client: ObjectChangeApplicator, clientConnection?: ClientConnection): boolean;
 }
 
+/**
+ * Interface for objects that need to manually handle property updates.
+ * This is called when a specific property of the object is updated.
+ */
 export interface ITrackableOnUpdateProperty<T extends object> {
   [onUpdateProperty](key: keyof T, value: T[keyof T], isForCreate: boolean, client: ObjectChangeApplicator, clientConnection: ClientConnection): boolean;
 }

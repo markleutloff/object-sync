@@ -120,14 +120,9 @@ export class ObjectSync {
    */
   async applyMessagesAsync(messagesByClient: Map<ClientConnection, Message[]>): Promise<Map<ClientConnection, MethodExecuteResult[]>> {
     const resultsByClient = new Map<ClientConnection, MethodExecuteResult[]>();
-    for (const [clientToken, messages] of messagesByClient) {
-      const results = await this._applicator.applyAsync(messages, clientToken);
-      resultsByClient.set(clientToken, results.methodExecuteResults);
-      for (const obj of results.newTrackedObjects) {
-        this._tracker.track(obj, {
-          knownClients: clientToken,
-        });
-      }
+    for (const [clientConnection, messages] of messagesByClient) {
+      const methodExecuteResults = await this.applyMessagesFromClientAsync(clientConnection, messages);
+      resultsByClient.set(clientConnection, methodExecuteResults);
     }
     return resultsByClient;
   }

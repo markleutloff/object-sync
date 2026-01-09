@@ -15,8 +15,8 @@ import { TrackedObjectPool } from "../shared/trackedObjectPool.js";
 import { invokeOnCreated, invokeOnDeleted, invokeOnUpdated, invokeOnUpdateProperty, invokeOnDelete } from "./trackableTarget.js";
 import { ApplicatorObjectInfo } from "./applicatorObjectInfo.js";
 import type { ClientConnection } from "../tracker/index.js";
+import { Constructor } from "../shared/types.js";
 
-type Constructor<T = any> = { new (...args: any[]): T };
 
 export type TypeGenerator = Constructor | TrackableTargetGenerator;
 
@@ -25,6 +25,7 @@ export type TrackableTargetGenerator<T = any> = (client: ObjectChangeApplicator,
 export type TypeSerializer<T> = {
   /**
    * The type ID of the type being serialized/deserialized.
+   * When not provided, the type ID will be inferred from the name of the constructor.
    */
   typeId?: string;
 
@@ -50,9 +51,9 @@ export type TypeSerializer<T> = {
        */
       deserialize(value: any): T;
       /**
-       * Function to serialize a value.
+       * Function to serialize an instance.
        */
-      serialize(value: T): any;
+      serialize(instance: T): any;
     }
 );
 

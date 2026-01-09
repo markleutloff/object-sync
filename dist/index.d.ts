@@ -88,7 +88,7 @@ export type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
 export type MethodCallResultByClient<T> = Map<ClientConnection, Promise<UnwrapPromise<T>>>;
 export type MethodCallResult<T> = Promise<MethodCallResultByClient<T>>;
 /**
- * TrackableObject wraps an object for change tracking and client synchronization on the host side.
+ * Wraps an object for change tracking and client synchronization on the host side.
  * It manages property changes, client-specific views, and message generation for create, change, delete, and execute operations.
  */
 export declare class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
@@ -299,22 +299,25 @@ export declare class ObjectChangeTracker {
 		typeId: string;
 	} | null;
 }
-type Constructor$1<T = any> = {
-	new (...args: any[]): T;
+export type CanTrackPayload<T extends object, TKey extends keyof T & string> = {
+	instance: T;
+	key: TKey;
+	info: ChangeTrackerObjectInfo<T>;
 };
-export type TrackedPropertySettingsBase<T> = {
+export type CanApplyPayload<T extends object, TKey extends keyof T & string> = {
+	instance: T;
+	key: TKey;
+	sourceClientConnection: ClientConnection;
+};
+export type TrackedPropertySettingsBase<T extends object> = {
 	/**
 	 * Returns true when the property/method should be tracked.
-	 * @param key The name of the property/method which should be tracked.
-	 * @param client The client which tracks the property/method.
 	 */
-	canTrack?<TKey extends keyof T & string>(object: T, key: TKey, host: ChangeTrackerObjectInfo<any>): boolean;
+	canTrack?<TKey extends keyof T & string>(payload: CanTrackPayload<T, TKey>): boolean;
 	/**
 	 *  Returns true when the property/method change should be applied.
-	 * @param key The name of the property/method which should be applied.
-	 * @param clientConnection The clientConnection from which the changes came from.
 	 */
-	canApply?<TKey extends keyof T & string>(object: T, key: TKey, clientConnection: ClientConnection): boolean;
+	canApply?<TKey extends keyof T & string>(payload: CanApplyPayload<T, TKey>): boolean;
 	/**
 	 * Defines how the property/method should be tracked/applied.
 	 * - "trackAndApply": Changes to the property/method are tracked and applied (thats the default).
@@ -324,33 +327,56 @@ export type TrackedPropertySettingsBase<T> = {
 	 */
 	mode?: "trackAndApply" | "trackOnly" | "applyOnly" | "none";
 };
-export type TrackedPropertySettings<T> = TrackedPropertySettingsBase<T> & {
+export type BeforeSendToClientPayload<T extends object, TKey extends keyof T & string, TValue> = {
+	instance: T;
+	key: TKey;
+	value: TValue;
+	destinationClientConnection: ClientConnection;
+};
+export type TrackedPropertySettings<T extends object, TValue> = TrackedPropertySettingsBase<T> & {
 	/**
 	 * Function which is called before sending the property value to the client.
 	 * Can be used to modify or filter the value being sent.
 	 * When the symbol value "nothing" is returned, the property update will be skipped.
-	 * @param key The name of the property which is being sent.
-	 * @param value The current value of the property.
-	 * @param clientConnection The client connection to which the value is being sent.
 	 */
-	beforeSendToClient?<TKey extends keyof T & string>(object: T, key: TKey, value: any, clientConnection: ClientConnection): any;
+	beforeSendToClient?<TKey extends keyof T & string>(payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
 };
+/**
+ * A unique symbol used to indicate that no value should be sent or processed.
+ */
 export declare const nothing: unique symbol;
+export type BeforeExecuteOnClientPayload<T extends object, TKey extends keyof T & string> = {
+	instance: T;
+	key: TKey;
+	args: T[TKey] extends (...args: infer P) => any ? P : never;
+	destinationClientConnection: ClientConnection;
+};
 export type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBase<T> & {
+	/**
+	 * Defines how method execution should handle returned Promises.
+	 * - "await": The method call will be awaited, and the resolved value will be used or the rejection will be sent back to the client.
+	 * - "normal": The Promise will be returned as-is without awaiting, once settled the result will be sent back to the client.
+	 * If not set, the default behavior is "normal".
+	 */
 	promiseHandlingType?: "await" | "normal";
 	/**
 	 * Function which is called before sending the method execution call to the client.
 	 * Can be used to prevent the method call from being sent.
-	 * @param key The name of the method which is being sent.
-	 * @param clientConnection The client connection to which the value is being sent.
+	 * When false is returned, the method call will be skipped.
 	 */
-	beforeExecuteOnClient?<TKey extends keyof T & string>(object: T, methodName: TKey, args: T[TKey] extends (...args: infer P) => any ? P : never, clientConnection: ClientConnection): boolean;
+	beforeExecuteOnClient?<TKey extends keyof T & string>(payload: BeforeExecuteOnClientPayload<T, TKey>): boolean;
+};
+export type BeforeSendTypeToClientPayload<T extends object> = {
+	instance: T;
+	constructor: Constructor<T>;
+	typeId: string;
+	destinationClientConnection: ClientConnection;
 };
 export type TrackableObjectSettings<T extends object> = {
 	typeId?: string;
 	generator?: TrackableTargetGenerator<T>;
 	properties?: {
-		[propertyKey: string]: TrackedPropertySettings<T>;
+		[propertyKey: string]: TrackedPropertySettings<T, any>;
 	};
 	methods?: {
 		[methodKey: string]: TrackedMethodSettings<T>;
@@ -358,19 +384,15 @@ export type TrackableObjectSettings<T extends object> = {
 	/**
 	 * Function which is called before sending the object to the client.
 	 * Can be used to modify or filter the typeId being sent.
-	 * When the symbol value "nothing", null or undefined is returned, the object creation will be skipped.
-	 * @param object The object which is being sent.
-	 * @param constructor The constructor function of the object being sent.
-	 * @param typeId The current typeId of the object which will be send
-	 * @param clientConnection The client connection to which the object is being sent.
+	 * When the "nothing" symbol, null or undefined is returned, the object creation will be skipped.
 	 */
-	beforeSendToClient?(object: T, constructor: Constructor$1<T>, typeId: string, clientConnection: ClientConnection): string | typeof nothing | Constructor$1 | null | undefined;
+	beforeSendToClient?(payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
 };
 /**
  * Property accessor decorator for marking a property as trackable.
  * Registers the property and ensures changes are propagated to all TrackableObject instances.
  */
-export declare function syncProperty<This, Return>(settings?: TrackedPropertySettings<This>): (target: ClassAccessorDecoratorTarget<This, Return>, context: ClassAccessorDecoratorContext<This, Return>) => ClassAccessorDecoratorResult<This, Return>;
+export declare function syncProperty<This extends object, Return>(settings?: TrackedPropertySettings<This, Return>): (target: ClassAccessorDecoratorTarget<This, Return>, context: ClassAccessorDecoratorContext<This, Return>) => ClassAccessorDecoratorResult<This, Return>;
 /**
  * Method decorator for marking a method as trackable.
  * Ensures method calls are recorded for all TrackableObject instances.
@@ -382,21 +404,19 @@ export declare function syncMethod<This extends object, Return>(settings?: Track
  * Registers the class for automatic tracking and assigns a typeId if provided.
  */
 export declare function syncObject<This extends abstract new (...args: any) => any>(settings?: TrackableObjectSettings<InstanceType<This>>): (target: This, context: ClassDecoratorContext<This>) => void;
-type Constructor$2<T = any> = {
-	new (...args: any[]): T;
-};
-export type TypeGenerator = Constructor$2 | TrackableTargetGenerator;
+export type TypeGenerator = Constructor | TrackableTargetGenerator;
 export type TrackableTargetGenerator<T = any> = (client: ObjectChangeApplicator, properties: ResolvablePropertyInfos<T>, objectId: unknown, typeId: string) => T;
 export type TypeSerializer<T> = {
 	/**
 	 * The type ID of the type being serialized/deserialized.
+	 * When not provided, the type ID will be inferred from the name of the constructor.
 	 */
 	typeId?: string;
 	/**
 	 * The constructor of the type being serialized/deserialized.
 	 * When no function to serialize/deserialize is provided, this constructor will be used for deserialization and instance.toJSON()/toValue() for serialization.
 	 */
-	type: Constructor$2<T>;
+	type: Constructor<T>;
 } & ({
 	/**
 	 * Function to deserialize a value.
@@ -412,9 +432,9 @@ export type TypeSerializer<T> = {
 	 */
 	deserialize(value: any): T;
 	/**
-	 * Function to serialize a value.
+	 * Function to serialize an instance.
 	 */
-	serialize(value: T): any;
+	serialize(instance: T): any;
 });
 export declare const allTypeGenerators: Map<string, TypeGenerator>;
 export type ObjectChangeApplicatorSettings = {
@@ -447,8 +467,8 @@ export declare class ObjectChangeApplicator {
 	 * If the object is not yet tracked, attempts to create it from pending messages.
 	 */
 	getPropertyValue(property: PropertyInfo<any, any>, clientConnection: ClientConnection): any;
-	findObjectOfType<T extends object>(constructor: Constructor$2<T>, objectId?: unknown): T | null;
-	findObjectsOfType<T extends object>(constructor: Constructor$2<T>): number | T[];
+	findObjectOfType<T extends object>(constructor: Constructor<T>, objectId?: unknown): T | null;
+	findObjectsOfType<T extends object>(constructor: Constructor<T>): number | T[];
 	get allTrackedObjects(): object[];
 	private deleteTrackedObject;
 	private constructObject;
@@ -464,23 +484,38 @@ export declare class ApplicatorObjectInfo<T extends object> extends ObjectInfoBa
 	get client(): ObjectChangeApplicator;
 }
 export type ObjectSyncMetaInfo = {
+	/**
+	 * The unique identifier for the object.
+	 */
 	objectId: unknown;
+	/**
+	 * The type identifier for the object.
+	 */
 	typeId: string;
+	/**
+	 * The actual object being tracked.
+	 */
 	object: object;
+	/**
+	 * The ApplicatorObjectInfo associated with the object, if any.
+	 */
 	client?: ApplicatorObjectInfo<any>;
+	/**
+	 * The ChangeTrackerObjectInfo associated with the object, if any.
+	 */
 	host?: ChangeTrackerObjectInfo<any>;
 };
 export declare function getObjectSyncMetaInfo(target: object): ObjectSyncMetaInfo | undefined;
 export type ObjectSyncMetaInfoCreateSettings<T extends object = object> = {
 	object: T;
+} & ({
 	objectIdPrefix: string;
 	typeId?: string;
 	objectId?: unknown;
 } | {
-	object: T;
 	typeId: string;
 	objectId: unknown;
-};
+});
 export declare function getHostObjectInfo<T extends object>(obj: T): ChangeTrackerObjectInfo<T> | null;
 export declare function getClientObjectInfo<T extends object>(obj: T): ApplicatorObjectInfo<T> | null;
 export declare class TrackedObjectPool {
@@ -499,18 +534,37 @@ export declare const onUpdated: unique symbol;
 export declare const onUpdateProperty: unique symbol;
 export declare const onDelete: unique symbol;
 export declare const onDeleted: unique symbol;
+/**
+ * Interface for objects that need to manually handle creation events.
+ */
 export interface ITrackableOnCreated<T extends object> {
 	[onCreated](changes: CreateObjectMessage<T>, client: ObjectChangeApplicator, clientConnection?: ClientConnection): void;
 }
+/**
+ * Interface for objects that need to manually handle update events.
+ * This is called after an object has been updated.
+ */
 export interface ITrackableOnUpdated<T extends object> {
 	[onUpdated](changes: ChangeObjectMessage<T>, client: ObjectChangeApplicator, clientConnection?: ClientConnection): void;
 }
+/**
+ * Interface for objects that need to handle deletion events.
+ * This is called after an object has been deleted.
+ */
 export interface ITrackableOnDeleted {
 	[onDeleted](client: ObjectChangeApplicator, clientConnection?: ClientConnection): void;
 }
+/**
+ * Interface for objects that need to handle deletion requests.
+ * This is called before an object is deleted, allowing for cleanup or vetoing the deletion.
+ */
 export interface ITrackableOnDelete {
 	[onDelete](client: ObjectChangeApplicator, clientConnection?: ClientConnection): boolean;
 }
+/**
+ * Interface for objects that need to manually handle property updates.
+ * This is called when a specific property of the object is updated.
+ */
 export interface ITrackableOnUpdateProperty<T extends object> {
 	[onUpdateProperty](key: keyof T, value: T[keyof T], isForCreate: boolean, client: ObjectChangeApplicator, clientConnection: ClientConnection): boolean;
 }
@@ -522,6 +576,10 @@ export interface ITrackedOnConvertedToTrackable<T extends object> {
 export interface ITrackedOnTick<T extends object> {
 	[onTick](): void;
 }
+/**
+ * A SyncableArray is an array-like structure that tracks changes made to its contents.
+ * It allows for efficient synchronization of array data across different clients or systems.
+ */
 export declare class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrackedOnConvertedToTrackable<SyncableArray<T>>, ITrackedOnTick<SyncableArray<T>> {
 	private _values;
 	private _changes;
@@ -564,6 +622,10 @@ export type SyncableObservableArrayEventMap = {
 	added: (items: any[], start: number) => void;
 	removed: (items: any[], start: number) => void;
 };
+/**
+ * A SyncableObservableArray is a SyncableArray that emits events when items are added or removed.
+ * This allows observers to react to changes in the array's contents.
+ */
 export declare class SyncableObservableArray<T> extends SyncableArray<T> implements IEventEmitter<SyncableObservableArrayEventMap> {
 	private readonly _eventEmitter;
 	constructor(initial?: T[]);

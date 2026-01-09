@@ -21,8 +21,8 @@ class Root {
 
   @syncMethod({
     promiseHandlingType: "await",
-    beforeExecuteOnClient(object, methodName, args, clientConnection) {
-      args[0] = args[0] + clientConnection.identity;
+    beforeExecuteOnClient({instance, key, args, destinationClientConnection}) {
+      args[0] = args[0] + destinationClientConnection.identity;
       return true;
     },
   })

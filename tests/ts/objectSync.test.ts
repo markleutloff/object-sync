@@ -3,8 +3,8 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
 
 @syncObject({
-  beforeSendToClient(object, constructor, typeId, clientConnection) {
-    return object.syncAsClientRoot ? ClientRoot : typeId;
+  beforeSendToClient({instance, constructor, typeId, destinationClientConnection}) {
+    return instance.syncAsClientRoot ? ClientRoot : typeId;
   }
 })
 class Root {
@@ -12,17 +12,17 @@ class Root {
   allowValueMutation = false;
 
   @syncProperty({
-    beforeSendToClient(object, key, value, clientConnection) {
-      if (clientConnection.identity === "host") {
+    beforeSendToClient({instance, key, value, destinationClientConnection}) {
+      if (destinationClientConnection.identity === "host") {
         return nothing;
       }
-      if (object.allowValueMutation && key === "value") {
+      if (instance.allowValueMutation && key === "value") {
         return value + value;
       }
       return value;
     },
-    canApply(object, key, clientConnection) {
-      if (clientConnection.identity === "host") {
+    canApply({sourceClientConnection}) {
+      if (sourceClientConnection.identity === "host") {
         return false;
       }
       return true;

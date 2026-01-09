@@ -1,29 +1,40 @@
 import "../shared/decorators.js";
 import { allTypeGenerators, TrackableTargetGenerator } from "../applicator/applicator.js";
 import { getObjectSyncMetaInfo } from "../shared/objectSyncMetaInfo.js";
-import { hasInIterable, OneOrMany } from "../shared/types.js";
-import type { ClientConnection, ObjectChangeTracker } from "./tracker.js";
+import type { Constructor } from "../shared/types.js";
+import type { ClientConnection } from "./tracker.js";
 import type { ChangeTrackerObjectInfo } from "./trackerObjectInfo.js";
-import { PropertyInfo } from "../shared/messages.js";
 
 const TRACKABLE_CONSTRUCTOR_INFO = Symbol("trackableConstructor");
 
-type Constructor<T = any> = { new (...args: any[]): T };
+export type CanTrackPayload<T extends object, TKey extends keyof T & string> = {
+  // The instance of the object which contains the property/method.
+  instance: T;
+  // The name of the property/method which should be tracked.
+  key: TKey;
+  // The ChangeTrackerObjectInfo which tracks the property/method.
+  info: ChangeTrackerObjectInfo<T>;
+};
 
-type TrackedPropertySettingsBase<T> = {
+export type CanApplyPayload<T extends object, TKey extends keyof T & string> = {
+  // The instance of the object which contains the property/method.
+  instance: T;
+  // The name of the property/method which should be applied.
+  key: TKey;
+  // The clientConnection from which the changes came from.
+  sourceClientConnection: ClientConnection;
+};
+
+type TrackedPropertySettingsBase<T extends object> = {
   /**
    * Returns true when the property/method should be tracked.
-   * @param key The name of the property/method which should be tracked.
-   * @param client The client which tracks the property/method.
    */
-  canTrack?<TKey extends keyof T & string>(object: T, key: TKey, host: ChangeTrackerObjectInfo<any>): boolean;
+  canTrack?<TKey extends keyof T & string>(payload: CanTrackPayload<T, TKey>): boolean;
 
   /**
    *  Returns true when the property/method change should be applied.
-   * @param key The name of the property/method which should be applied.
-   * @param clientConnection The clientConnection from which the changes came from.
    */
-  canApply?<TKey extends keyof T & string>(object: T, key: TKey, clientConnection: ClientConnection): boolean;
+  canApply?<TKey extends keyof T & string>(payload: CanApplyPayload<T, TKey>): boolean;
 
   /**
    * Defines how the property/method should be tracked/applied.
@@ -35,22 +46,44 @@ type TrackedPropertySettingsBase<T> = {
   mode?: "trackAndApply" | "trackOnly" | "applyOnly" | "none";
 };
 
-type TrackedPropertySettings<T> = TrackedPropertySettingsBase<T> & {
+export type BeforeSendToClientPayload<T extends object, TKey extends keyof T & string, TValue> = {
+  // The instance of the object which contains the property.
+  instance: T;
+  // The name of the property which is being sent.
+  key: TKey;
+  // The current value of the property.
+  value: TValue;
+  // The client connection to which the value is being sent.
+  destinationClientConnection: ClientConnection;
+};
+
+type TrackedPropertySettings<T extends object, TValue> = TrackedPropertySettingsBase<T> & {
   /**
    * Function which is called before sending the property value to the client.
    * Can be used to modify or filter the value being sent.
    * When the symbol value "nothing" is returned, the property update will be skipped.
-   * @param key The name of the property which is being sent.
-   * @param value The current value of the property.
-   * @param clientConnection The client connection to which the value is being sent.
    */
-  beforeSendToClient?<TKey extends keyof T & string>(object: T, key: TKey, value: any, clientConnection: ClientConnection): any;
+  beforeSendToClient?<TKey extends keyof T & string>(payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
 };
 
+/**
+ * A unique symbol used to indicate that no value should be sent or processed.
+ */
 export const nothing = Symbol("nothing");
 
+export type BeforeExecuteOnClientPayload<T extends object, TKey extends keyof T & string> = {
+  // The instance of the object which contains the method.
+  instance: T;
+  // The name of the method which is being sent
+  key: TKey;
+  // The arguments being passed to the method. These can be modified.
+  args: T[TKey] extends (...args: infer P) => any ? P : never;
+  // The client connection to which the method execution is being sent.
+  destinationClientConnection: ClientConnection;
+};
+
 type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBase<T> & {
-  /*
+  /**
    * Defines how method execution should handle returned Promises.
    * - "await": The method call will be awaited, and the resolved value will be used or the rejection will be sent back to the client.
    * - "normal": The Promise will be returned as-is without awaiting, once settled the result will be sent back to the client.
@@ -61,13 +94,12 @@ type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBase<T> & 
   /**
    * Function which is called before sending the method execution call to the client.
    * Can be used to prevent the method call from being sent.
-   * @param key The name of the method which is being sent.
-   * @param clientConnection The client connection to which the value is being sent.
+   * When false is returned, the method call will be skipped.
    */
-  beforeExecuteOnClient?<TKey extends keyof T & string>(object: T, methodName: TKey, args: T[TKey] extends (...args: infer P) => any ? P : never, clientConnection: ClientConnection): boolean;
+  beforeExecuteOnClient?<TKey extends keyof T & string>(payload: BeforeExecuteOnClientPayload<T, TKey>): boolean;
 };
 
-type TrackedPropertyInfo<T> = TrackedPropertySettings<T> & {
+type TrackedPropertyInfo<T extends object, TValue> = TrackedPropertySettings<T, TValue> & {
   isBeeingApplied: boolean;
 };
 
@@ -75,21 +107,28 @@ type TrackedMethodInfo<T extends object> = TrackedMethodSettings<T> & {
   isBeeingApplied: boolean;
 };
 
+export type BeforeSendTypeToClientPayload<T extends object> = {
+  // The instance of the object which is being sent.
+  instance: T;
+  // The constructor function of the object being sent.
+  constructor: Constructor<T>;
+  // The current typeId of the object which will be send
+  typeId: string;
+  // The client connection to which the object is being sent.
+  destinationClientConnection: ClientConnection;
+};
+
 type TrackableConstructorInfo<T extends object> = {
-  trackedProperties: Map<string, TrackedPropertyInfo<T>>;
+  trackedProperties: Map<string, TrackedPropertyInfo<T, any>>;
   trackedMethods: Map<string, TrackedMethodInfo<T>>;
   typeId: string;
 
   /**
    * Function which is called before sending the object to the client.
    * Can be used to modify or filter the typeId being sent.
-   * When the symbol value "nothing", null or undefined is returned, the object creation will be skipped.
-   * @param object The object which is being sent.
-   * @param constructor The constructor function of the object being sent.
-   * @param typeId The current typeId of the object which will be send
-   * @param clientConnection The client connection to which the object is being sent.
+   * When the "nothing" symbol, null or undefined is returned, the object creation will be skipped.
    */
-  beforeSendToClient?(object: T, constructor: Constructor<T>, typeId: string, clientConnection: ClientConnection): string | typeof nothing | Constructor | null | undefined;
+  beforeSendToClient?(payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
 };
 
 type TrackableObjectSettings<T extends object> = {
@@ -99,32 +138,28 @@ type TrackableObjectSettings<T extends object> = {
   generator?: TrackableTargetGenerator<T>;
 
   // Additional settings for tracked properties
-  properties?: { [propertyKey: string]: TrackedPropertySettings<T> };
+  properties?: { [propertyKey: string]: TrackedPropertySettings<T, any> };
   // Additional settings for tracked methods
   methods?: { [methodKey: string]: TrackedMethodSettings<T> };
 
   /**
    * Function which is called before sending the object to the client.
    * Can be used to modify or filter the typeId being sent.
-   * When the symbol value "nothing", null or undefined is returned, the object creation will be skipped.
-   * @param object The object which is being sent.
-   * @param constructor The constructor function of the object being sent.
-   * @param typeId The current typeId of the object which will be send
-   * @param clientConnection The client connection to which the object is being sent.
+   * When the "nothing" symbol, null or undefined is returned, the object creation will be skipped.
    */
-  beforeSendToClient?(object: T, constructor: Constructor<T>, typeId: string, clientConnection: ClientConnection): string | typeof nothing | Constructor | null | undefined;
+  beforeSendToClient?(payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
 };
 
 /**
  * Property accessor decorator for marking a property as trackable.
  * Registers the property and ensures changes are propagated to all TrackableObject instances.
  */
-export function syncProperty<This, Return>(settings?: TrackedPropertySettings<This>) {
+export function syncProperty<This extends object, Return>(settings?: TrackedPropertySettings<This, Return>) {
   settings ??= {};
 
   return function syncProperty(target: ClassAccessorDecoratorTarget<This, Return>, context: ClassAccessorDecoratorContext<This, Return>) {
     const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
-    const propertyInfo: TrackedPropertyInfo<This> = {
+    const propertyInfo: TrackedPropertyInfo<This, Return> = {
       ...settings,
       isBeeingApplied: false,
     };
@@ -232,14 +267,14 @@ export function syncObject<This extends abstract new (...args: any) => any>(sett
 
 function ensureTrackableConstructorInfo<T extends object = any>(metadata: DecoratorMetadataObject): TrackableConstructorInfo<T> {
   const oldTrackableInfo = (metadata[TRACKABLE_CONSTRUCTOR_INFO] ?? {
-    trackedProperties: new Map<string, TrackedPropertyInfo<T>>(),
+    trackedProperties: new Map<string, TrackedPropertyInfo<T, any>>(),
     trackedMethods: new Map<string, TrackedMethodInfo<T>>(),
     isAutoTrackable: false,
     beforeSendToClient: undefined,
   }) as TrackableConstructorInfo<T>;
 
   const newTrackableInfo: TrackableConstructorInfo<T> = {
-    trackedProperties: new Map<string, TrackedPropertyInfo<T>>(oldTrackableInfo.trackedProperties),
+    trackedProperties: new Map<string, TrackedPropertyInfo<T, any>>(oldTrackableInfo.trackedProperties),
     trackedMethods: new Map<string, TrackedMethodInfo<T>>(oldTrackableInfo.trackedMethods),
     typeId: oldTrackableInfo.typeId,
     beforeSendToClient: oldTrackableInfo.beforeSendToClient,
@@ -268,37 +303,37 @@ export function getSyncMethodInfo(constructor: Constructor, propertyKey: string)
   return propertyInfo ?? null;
 }
 
-export function checkCanApplyProperty(constructor: Constructor, object: object, propertyKey: string, isMethod: boolean, clientConnection: ClientConnection) {
+export function checkCanApplyProperty(constructor: Constructor, instance: object, propertyKey: string, isMethod: boolean, sourceClientConnection: ClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) return false;
   const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
   if (!propertyInfo) return false;
 
   if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly") return;
-  if (propertyInfo.canApply?.(object, propertyKey, clientConnection) === false) return false;
+  if (propertyInfo.canApply?.({ instance, key: propertyKey, sourceClientConnection }) === false) return false;
   return true;
 }
 
-export function checkCanTrackProperty(constructor: Constructor, object: object, propertyKey: string, isMethod: boolean, host: ChangeTrackerObjectInfo<any>) {
+export function checkCanTrackProperty(constructor: Constructor, instance: object, propertyKey: string, isMethod: boolean, info: ChangeTrackerObjectInfo<any>) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return false;
   }
   const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
-  return checkCanTrackPropertyInfo(propertyInfo, object, propertyKey, host);
+  return checkCanTrackPropertyInfo(propertyInfo, instance, propertyKey, info);
 }
 
-function checkCanTrackPropertyInfo(propertyInfo: TrackedPropertyInfo<any> | undefined, object: object, propertyKey: string, host: ChangeTrackerObjectInfo<any>) {
+function checkCanTrackPropertyInfo(propertyInfo: TrackedPropertyInfo<any, any> | undefined, instance: object, propertyKey: string, info: ChangeTrackerObjectInfo<any>) {
   if (!propertyInfo) {
     return false;
   }
-  if (propertyInfo.canTrack?.(object, propertyKey, host) === false) {
+  if (propertyInfo.canTrack?.({ instance, key: propertyKey, info }) === false) {
     return false;
   }
   return true;
 }
 
-export function beforeExecuteOnClient(constructor: Constructor, object: object, methodKey: string, args: any[], clientConnection: ClientConnection) {
+export function beforeExecuteOnClient(constructor: Constructor, instance: object, methodKey: string, args: any[], destinationClientConnection: ClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return false;
@@ -307,13 +342,13 @@ export function beforeExecuteOnClient(constructor: Constructor, object: object, 
   if (!methodInfo) {
     return false;
   }
-  if (methodInfo.beforeExecuteOnClient?.(object, methodKey, args, clientConnection) === false) {
+  if (methodInfo.beforeExecuteOnClient?.({ instance, key: methodKey, args, destinationClientConnection }) === false) {
     return false;
   }
   return true;
 }
 
-export function beforeSendPropertyToClient(constructor: Constructor, object: object, propertyKey: string, value: any, clientConnection: ClientConnection) {
+export function beforeSendPropertyToClient(constructor: Constructor, object: object, propertyKey: string, value: any, destinationClientConnection: ClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return nothing;
@@ -325,10 +360,10 @@ export function beforeSendPropertyToClient(constructor: Constructor, object: obj
   if (!propertyInfo.beforeSendToClient) {
     return value;
   }
-  return propertyInfo.beforeSendToClient(object, propertyKey, value, clientConnection);
+  return propertyInfo.beforeSendToClient({ instance: object, key: propertyKey, value, destinationClientConnection });
 }
 
-export function beforeSendObjectToClient(constructor: Constructor, object: object, typeId: string, clientConnection: ClientConnection) {
+export function beforeSendObjectToClient(constructor: Constructor, instance: object, typeId: string, destinationClientConnection: ClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return nothing;
@@ -336,7 +371,7 @@ export function beforeSendObjectToClient(constructor: Constructor, object: objec
   if (!constructorInfo.beforeSendToClient) {
     return typeId;
   }
-  const result = constructorInfo.beforeSendToClient(object, constructor, typeId, clientConnection);
+  const result = constructorInfo.beforeSendToClient({ instance, constructor, typeId, destinationClientConnection });
   if (result === null || result === undefined || result === nothing) {
     return nothing;
   }

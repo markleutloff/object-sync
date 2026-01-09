@@ -7,6 +7,10 @@ type SyncableObservableArrayEventMap = {
   removed: (items: any[], start: number) => void;
 };
 
+/**
+ * A SyncableObservableArray is a SyncableArray that emits events when items are added or removed.
+ * This allows observers to react to changes in the array's contents.
+ */
 @syncObject({
   typeId: "SyncableObservableArray",
 })

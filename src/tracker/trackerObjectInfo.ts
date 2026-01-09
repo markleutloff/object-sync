@@ -63,7 +63,7 @@ type PendingMethodCall = {
 };
 
 /**
- * TrackableObject wraps an object for change tracking and client synchronization on the host side.
+ * Wraps an object for change tracking and client synchronization on the host side.
  * It manages property changes, client-specific views, and message generation for create, change, delete, and execute operations.
  */
 export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {

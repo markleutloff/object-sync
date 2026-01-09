@@ -5,10 +5,25 @@ import { getTrackableTypeInfo } from "../tracker/decorators.js";
 export const objectSyncSymbol = Symbol("objectSync");
 
 export type ObjectSyncMetaInfo = {
+  /**
+   * The unique identifier for the object.
+   */
   objectId: unknown;
+  /**
+   * The type identifier for the object.
+   */
   typeId: string;
+  /**
+   * The actual object being tracked.
+   */
   object: object;
+  /**
+   * The ApplicatorObjectInfo associated with the object, if any.
+   */
   client?: ApplicatorObjectInfo<any>;
+  /**
+   * The ChangeTrackerObjectInfo associated with the object, if any.
+   */
   host?: ChangeTrackerObjectInfo<any>;
 };
 
@@ -25,18 +40,19 @@ export function createObjectId(objectIdPrefix: string): string {
   return `${objectIdPrefix}${nextObjectId++}`;
 }
 
-export type ObjectSyncMetaInfoCreateSettings<T extends object = object> =
+export type ObjectSyncMetaInfoCreateSettings<T extends object = object> = {
+  object: T;
+} & (
   | {
-      object: T;
       objectIdPrefix: string;
       typeId?: string;
       objectId?: unknown;
     }
   | {
-      object: T;
       typeId: string;
       objectId: unknown;
-    };
+    }
+);
 
 export function ensureObjectSyncMetaInfo(settings: ObjectSyncMetaInfoCreateSettings): ObjectSyncMetaInfo {
   let metaInfo = getObjectSyncMetaInfo(settings.object);

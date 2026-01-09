@@ -9,6 +9,10 @@ import { getHostObjectInfo } from "./objectSyncMetaInfo.js";
 
 export type SyncableArrayChange<T> = { start: number; deleteCount: number; items: PropertyInfo<any, any>[] };
 
+/**
+ * A SyncableArray is an array-like structure that tracks changes made to its contents.
+ * It allows for efficient synchronization of array data across different clients or systems.
+ */
 @syncObject({
   typeId: "SyncableArray",
   properties: {

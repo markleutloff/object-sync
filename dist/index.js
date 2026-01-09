@@ -512,7 +512,7 @@ function getSyncMethodInfo(constructor, propertyKey) {
   const propertyInfo = constructorInfo.trackedMethods.get(propertyKey);
   return propertyInfo ?? null;
 }
-function checkCanApplyProperty(constructor, object, propertyKey, isMethod, clientConnection) {
+function checkCanApplyProperty(constructor, instance, propertyKey, isMethod, sourceClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo)
     return false;
@@ -521,20 +521,20 @@ function checkCanApplyProperty(constructor, object, propertyKey, isMethod, clien
     return false;
   if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly")
     return;
-  if (propertyInfo.canApply?.(object, propertyKey, clientConnection) === false)
+  if (propertyInfo.canApply?.({ instance, key: propertyKey, sourceClientConnection }) === false)
     return false;
   return true;
 }
-function checkCanTrackPropertyInfo(propertyInfo, object, propertyKey, host) {
+function checkCanTrackPropertyInfo(propertyInfo, instance, propertyKey, info) {
   if (!propertyInfo) {
     return false;
   }
-  if (propertyInfo.canTrack?.(object, propertyKey, host) === false) {
+  if (propertyInfo.canTrack?.({ instance, key: propertyKey, info }) === false) {
     return false;
   }
   return true;
 }
-function beforeExecuteOnClient(constructor, object, methodKey, args, clientConnection) {
+function beforeExecuteOnClient(constructor, instance, methodKey, args, destinationClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return false;
@@ -543,12 +543,12 @@ function beforeExecuteOnClient(constructor, object, methodKey, args, clientConne
   if (!methodInfo) {
     return false;
   }
-  if (methodInfo.beforeExecuteOnClient?.(object, methodKey, args, clientConnection) === false) {
+  if (methodInfo.beforeExecuteOnClient?.({ instance, key: methodKey, args, destinationClientConnection }) === false) {
     return false;
   }
   return true;
 }
-function beforeSendPropertyToClient(constructor, object, propertyKey, value, clientConnection) {
+function beforeSendPropertyToClient(constructor, object, propertyKey, value, destinationClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return nothing;
@@ -560,9 +560,9 @@ function beforeSendPropertyToClient(constructor, object, propertyKey, value, cli
   if (!propertyInfo.beforeSendToClient) {
     return value;
   }
-  return propertyInfo.beforeSendToClient(object, propertyKey, value, clientConnection);
+  return propertyInfo.beforeSendToClient({ instance: object, key: propertyKey, value, destinationClientConnection });
 }
-function beforeSendObjectToClient(constructor, object, typeId, clientConnection) {
+function beforeSendObjectToClient(constructor, instance, typeId, destinationClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return nothing;
@@ -570,7 +570,7 @@ function beforeSendObjectToClient(constructor, object, typeId, clientConnection)
   if (!constructorInfo.beforeSendToClient) {
     return typeId;
   }
-  const result = constructorInfo.beforeSendToClient(object, constructor, typeId, clientConnection);
+  const result = constructorInfo.beforeSendToClient({ instance, constructor, typeId, destinationClientConnection });
   if (result === null || result === void 0 || result === nothing) {
     return nothing;
   }
@@ -1687,14 +1687,9 @@ var ObjectSync = class {
   }
   async applyMessagesAsync(messagesByClient) {
     const resultsByClient = /* @__PURE__ */ new Map();
-    for (const [clientToken, messages] of messagesByClient) {
-      const results = await this._applicator.applyAsync(messages, clientToken);
-      resultsByClient.set(clientToken, results.methodExecuteResults);
-      for (const obj of results.newTrackedObjects) {
-        this._tracker.track(obj, {
-          knownClients: clientToken
-        });
-      }
+    for (const [clientConnection, messages] of messagesByClient) {
+      const methodExecuteResults = await this.applyMessagesFromClientAsync(clientConnection, messages);
+      resultsByClient.set(clientConnection, methodExecuteResults);
     }
     return resultsByClient;
   }
