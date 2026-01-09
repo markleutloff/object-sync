@@ -313,11 +313,11 @@ export type TrackedPropertySettingsBase<T extends object> = {
 	/**
 	 * Returns true when the property/method should be tracked.
 	 */
-	canTrack?<TKey extends keyof T & string>(payload: CanTrackPayload<T, TKey>): boolean;
+	canTrack?<TKey extends keyof T & string>(this: T, payload: CanTrackPayload<T, TKey>): boolean;
 	/**
 	 *  Returns true when the property/method change should be applied.
 	 */
-	canApply?<TKey extends keyof T & string>(payload: CanApplyPayload<T, TKey>): boolean;
+	canApply?<TKey extends keyof T & string>(this: T, payload: CanApplyPayload<T, TKey>): boolean;
 	/**
 	 * Defines how the property/method should be tracked/applied.
 	 * - "trackAndApply": Changes to the property/method are tracked and applied (thats the default).
@@ -339,7 +339,7 @@ export type TrackedPropertySettings<T extends object, TValue> = TrackedPropertyS
 	 * Can be used to modify or filter the value being sent.
 	 * When the symbol value "nothing" is returned, the property update will be skipped.
 	 */
-	beforeSendToClient?<TKey extends keyof T & string>(payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
+	beforeSendToClient?<TKey extends keyof T & string>(this: T, payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
 };
 /**
  * A unique symbol used to indicate that no value should be sent or processed.
@@ -364,7 +364,7 @@ export type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBas
 	 * Can be used to prevent the method call from being sent.
 	 * When false is returned, the method call will be skipped.
 	 */
-	beforeExecuteOnClient?<TKey extends keyof T & string>(payload: BeforeExecuteOnClientPayload<T, TKey>): boolean;
+	beforeExecuteOnClient?<TKey extends keyof T & string>(this: T, payload: BeforeExecuteOnClientPayload<T, TKey>): boolean;
 };
 export type BeforeSendTypeToClientPayload<T extends object> = {
 	instance: T;
@@ -386,7 +386,7 @@ export type TrackableObjectSettings<T extends object> = {
 	 * Can be used to modify or filter the typeId being sent.
 	 * When the "nothing" symbol, null or undefined is returned, the object creation will be skipped.
 	 */
-	beforeSendToClient?(payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
+	beforeSendToClient?(this: T, payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
 };
 /**
  * Property accessor decorator for marking a property as trackable.

@@ -29,12 +29,12 @@ type TrackedPropertySettingsBase<T extends object> = {
   /**
    * Returns true when the property/method should be tracked.
    */
-  canTrack?<TKey extends keyof T & string>(payload: CanTrackPayload<T, TKey>): boolean;
+  canTrack?<TKey extends keyof T & string>(this: T, payload: CanTrackPayload<T, TKey>): boolean;
 
   /**
    *  Returns true when the property/method change should be applied.
    */
-  canApply?<TKey extends keyof T & string>(payload: CanApplyPayload<T, TKey>): boolean;
+  canApply?<TKey extends keyof T & string>(this: T, payload: CanApplyPayload<T, TKey>): boolean;
 
   /**
    * Defines how the property/method should be tracked/applied.
@@ -63,7 +63,7 @@ type TrackedPropertySettings<T extends object, TValue> = TrackedPropertySettings
    * Can be used to modify or filter the value being sent.
    * When the symbol value "nothing" is returned, the property update will be skipped.
    */
-  beforeSendToClient?<TKey extends keyof T & string>(payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
+  beforeSendToClient?<TKey extends keyof T & string>(this: T, payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
 };
 
 /**
@@ -96,7 +96,7 @@ type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBase<T> & 
    * Can be used to prevent the method call from being sent.
    * When false is returned, the method call will be skipped.
    */
-  beforeExecuteOnClient?<TKey extends keyof T & string>(payload: BeforeExecuteOnClientPayload<T, TKey>): boolean;
+  beforeExecuteOnClient?<TKey extends keyof T & string>(this: T, payload: BeforeExecuteOnClientPayload<T, TKey>): boolean;
 };
 
 type TrackedPropertyInfo<T extends object, TValue> = TrackedPropertySettings<T, TValue> & {
@@ -128,7 +128,7 @@ type TrackableConstructorInfo<T extends object> = {
    * Can be used to modify or filter the typeId being sent.
    * When the "nothing" symbol, null or undefined is returned, the object creation will be skipped.
    */
-  beforeSendToClient?(payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
+  beforeSendToClient?(this: T, payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
 };
 
 type TrackableObjectSettings<T extends object> = {
@@ -147,7 +147,7 @@ type TrackableObjectSettings<T extends object> = {
    * Can be used to modify or filter the typeId being sent.
    * When the "nothing" symbol, null or undefined is returned, the object creation will be skipped.
    */
-  beforeSendToClient?(payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
+  beforeSendToClient?(this: T, payload: BeforeSendTypeToClientPayload<T>): string | typeof nothing | Constructor | null | undefined;
 };
 
 /**
@@ -310,7 +310,7 @@ export function checkCanApplyProperty(constructor: Constructor, instance: object
   if (!propertyInfo) return false;
 
   if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly") return;
-  if (propertyInfo.canApply?.({ instance, key: propertyKey, sourceClientConnection }) === false) return false;
+  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientConnection }) === false) return false;
   return true;
 }
 
@@ -327,7 +327,7 @@ function checkCanTrackPropertyInfo(propertyInfo: TrackedPropertyInfo<any, any> |
   if (!propertyInfo) {
     return false;
   }
-  if (propertyInfo.canTrack?.({ instance, key: propertyKey, info }) === false) {
+  if (propertyInfo.canTrack?.call(instance, { instance, key: propertyKey, info }) === false) {
     return false;
   }
   return true;
@@ -342,13 +342,13 @@ export function beforeExecuteOnClient(constructor: Constructor, instance: object
   if (!methodInfo) {
     return false;
   }
-  if (methodInfo.beforeExecuteOnClient?.({ instance, key: methodKey, args, destinationClientConnection }) === false) {
+  if (methodInfo.beforeExecuteOnClient?.call(instance, { instance, key: methodKey, args, destinationClientConnection }) === false) {
     return false;
   }
   return true;
 }
 
-export function beforeSendPropertyToClient(constructor: Constructor, object: object, propertyKey: string, value: any, destinationClientConnection: ClientConnection) {
+export function beforeSendPropertyToClient(constructor: Constructor, instance: object, propertyKey: string, value: any, destinationClientConnection: ClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return nothing;
@@ -360,7 +360,7 @@ export function beforeSendPropertyToClient(constructor: Constructor, object: obj
   if (!propertyInfo.beforeSendToClient) {
     return value;
   }
-  return propertyInfo.beforeSendToClient({ instance: object, key: propertyKey, value, destinationClientConnection });
+  return propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientConnection });
 }
 
 export function beforeSendObjectToClient(constructor: Constructor, instance: object, typeId: string, destinationClientConnection: ClientConnection) {
@@ -371,7 +371,7 @@ export function beforeSendObjectToClient(constructor: Constructor, instance: obj
   if (!constructorInfo.beforeSendToClient) {
     return typeId;
   }
-  const result = constructorInfo.beforeSendToClient({ instance, constructor, typeId, destinationClientConnection });
+  const result = constructorInfo.beforeSendToClient.call(instance, { instance, constructor, typeId, destinationClientConnection });
   if (result === null || result === undefined || result === nothing) {
     return nothing;
   }

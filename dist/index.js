@@ -521,7 +521,7 @@ function checkCanApplyProperty(constructor, instance, propertyKey, isMethod, sou
     return false;
   if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly")
     return;
-  if (propertyInfo.canApply?.({ instance, key: propertyKey, sourceClientConnection }) === false)
+  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientConnection }) === false)
     return false;
   return true;
 }
@@ -529,7 +529,7 @@ function checkCanTrackPropertyInfo(propertyInfo, instance, propertyKey, info) {
   if (!propertyInfo) {
     return false;
   }
-  if (propertyInfo.canTrack?.({ instance, key: propertyKey, info }) === false) {
+  if (propertyInfo.canTrack?.call(instance, { instance, key: propertyKey, info }) === false) {
     return false;
   }
   return true;
@@ -543,12 +543,12 @@ function beforeExecuteOnClient(constructor, instance, methodKey, args, destinati
   if (!methodInfo) {
     return false;
   }
-  if (methodInfo.beforeExecuteOnClient?.({ instance, key: methodKey, args, destinationClientConnection }) === false) {
+  if (methodInfo.beforeExecuteOnClient?.call(instance, { instance, key: methodKey, args, destinationClientConnection }) === false) {
     return false;
   }
   return true;
 }
-function beforeSendPropertyToClient(constructor, object, propertyKey, value, destinationClientConnection) {
+function beforeSendPropertyToClient(constructor, instance, propertyKey, value, destinationClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return nothing;
@@ -560,7 +560,7 @@ function beforeSendPropertyToClient(constructor, object, propertyKey, value, des
   if (!propertyInfo.beforeSendToClient) {
     return value;
   }
-  return propertyInfo.beforeSendToClient({ instance: object, key: propertyKey, value, destinationClientConnection });
+  return propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientConnection });
 }
 function beforeSendObjectToClient(constructor, instance, typeId, destinationClientConnection) {
   const constructorInfo = getTrackableTypeInfo(constructor);
@@ -570,7 +570,7 @@ function beforeSendObjectToClient(constructor, instance, typeId, destinationClie
   if (!constructorInfo.beforeSendToClient) {
     return typeId;
   }
-  const result = constructorInfo.beforeSendToClient({ instance, constructor, typeId, destinationClientConnection });
+  const result = constructorInfo.beforeSendToClient.call(instance, { instance, constructor, typeId, destinationClientConnection });
   if (result === null || result === void 0 || result === nothing) {
     return nothing;
   }

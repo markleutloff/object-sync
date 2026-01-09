@@ -66,7 +66,7 @@ class SomeTrackableClass {
   // Allow remote invocation of this method from clients
   @syncMethod({
     promiseHandlingType: "await", // Await the result before responding
-    beforeExecuteOnClient({instance, key, args, destinationClientConnection}) {
+    beforeExecuteOnClient({args, destinationClientConnection}) {
       // Example: modify arguments before execution on client
       args[0] = args[0] + destinationClientConnection.identity;
 
