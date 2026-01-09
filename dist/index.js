@@ -1163,7 +1163,7 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
   createPropertyInfo(value) {
     const trackable = this.convertToTrackableObjectReference(value);
     const paramInfo = {
-      value: trackable ?? value,
+      value,
       objectId: trackable?.objectSyncMetaInfo.objectId,
       [isPropertyInfoSymbol]: true
     };

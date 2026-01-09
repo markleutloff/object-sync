@@ -1,5 +1,5 @@
 import type { ApplicatorObjectInfo } from "../applicator/applicatorObjectInfo.js";
-import type { ChangeTrackerObjectInfo } from "../tracker/trackerObjectInfo.js";
+import { ChangeTrackerObjectInfo } from "../tracker/trackerObjectInfo.js";
 import { getTrackableTypeInfo } from "../tracker/decorators.js";
 
 export const objectSyncSymbol = Symbol("objectSync");

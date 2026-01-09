@@ -3,16 +3,16 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
 
 @syncObject({
-  beforeSendToClient({instance, constructor, typeId, destinationClientConnection}) {
+  beforeSendToClient({ instance, constructor, typeId, destinationClientConnection }) {
     return instance.syncAsClientRoot ? ClientRoot : typeId;
-  }
+  },
 })
 class Root {
   syncAsClientRoot = false;
   allowValueMutation = false;
 
   @syncProperty({
-    beforeSendToClient({instance, key, value, destinationClientConnection}) {
+    beforeSendToClient({ instance, key, value, destinationClientConnection }) {
       if (destinationClientConnection.identity === "host") {
         return nothing;
       }
@@ -21,7 +21,7 @@ class Root {
       }
       return value;
     },
-    canApply({sourceClientConnection}) {
+    canApply({ sourceClientConnection }) {
       if (sourceClientConnection.identity === "host") {
         return false;
       }
@@ -29,6 +29,13 @@ class Root {
     },
   })
   accessor value: number = 0;
+
+  @syncProperty({
+    canTrack() {
+      return false;
+    },
+  })
+  accessor untrackedValue: number = 0;
 
   @syncProperty()
   accessor testClass: SerializableClass | undefined;
@@ -43,6 +50,12 @@ class Root {
 class ClientRoot {
   @syncProperty()
   accessor value: number = 0;
+}
+
+@syncObject({})
+class ClassWithSubClass {
+  @syncProperty()
+  accessor value: ClientRoot = new ClientRoot();
 }
 
 class SerializableClass {
@@ -83,7 +96,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 
     const clientSettings = {
       identity: "client",
-      typeGenerators: [Root, ClientRoot],
+      typeGenerators: [Root, ClientRoot, ClassWithSubClass],
       ...defaultSettings,
     };
 
@@ -106,6 +119,19 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     assert.strictEqual(clientRoot.value, hostRoot.value);
   });
 
+  it("should report sub tracked classes ", async () => {
+    const classWithSubClass = new ClassWithSubClass();
+    hostObjectSync.track(classWithSubClass);
+
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+    const clientClassWithSubClass = clientObjectSync.findObjectOfType(ClassWithSubClass)!;
+    assert.notStrictEqual(clientClassWithSubClass, classWithSubClass);
+
+    const clientSubClass = clientClassWithSubClass.value;
+    assert.equal(!!clientSubClass, true);
+  });
+
   it("should report changes to client", async () => {
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
     const clientRoot = clientObjectSync.findObjectOfType(Root)!;
@@ -115,6 +141,17 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     hostRoot.value = 100;
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
     assert.strictEqual(clientRoot.value, hostRoot.value);
+  });
+
+  it("should not report untracked changes to client", async () => {
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
+
+    assert.strictEqual(clientRoot.value, hostRoot.value);
+
+    hostRoot.untrackedValue = 100;
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    assert.notStrictEqual(clientRoot.untrackedValue, hostRoot.untrackedValue);
   });
 
   it("should execute methods on client", async () => {

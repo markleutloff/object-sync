@@ -184,7 +184,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   createPropertyInfo(value: any): PropertyInfo<T, keyof T> {
     const trackable = this.convertToTrackableObjectReference(value);
     const paramInfo: PropertyInfo<any, any> = {
-      value: trackable ?? value,
+      value: /*trackable ?? */value,
       objectId: trackable?.objectSyncMetaInfo.objectId,
       [isPropertyInfoSymbol]: true,
     };
