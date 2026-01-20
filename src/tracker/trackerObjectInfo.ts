@@ -414,13 +414,13 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
 
       const propertyInfo = this.createPropertyInfo(finalValue);
 
-      const clientPropertyInfo = this.serializePropertyInfo(key as keyof T, propertyInfo as PropertyInfo<T, keyof T>, client);
+      const clientPropertyInfo = this.serializePropertyInfo(propertyInfo as PropertyInfo<T, keyof T>);
       if (clientPropertyInfo) result[key as keyof T] = clientPropertyInfo;
     });
     return result;
   }
 
-  private serializePropertyInfo(key: keyof T, propertyInfo: PropertyInfo<T, keyof T>, client: ClientConnection) {
+  public serializePropertyInfo(propertyInfo: PropertyInfo<T, keyof T>) {
     let clientPropertyInfo: PropertyInfo<T, keyof T> = {
       objectId: propertyInfo.objectId,
       value: propertyInfo.value,

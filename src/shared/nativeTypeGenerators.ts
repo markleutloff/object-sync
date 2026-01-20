@@ -9,8 +9,8 @@ export const nativeArraySerializer: NativeTypeSerializer = {
   type: Array,
   typeId: "<NativeArray>",
   serialize(instance: Array<any>, trackerInfo: ChangeTrackerObjectInfo<any>) {
-    return mapIterable(instance, (item) => {
-      const propertyInfo = trackerInfo.createPropertyInfo(item);
+    return mapIterable(instance, (value) => {
+      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
       return propertyInfo;
     });
   },
@@ -27,7 +27,7 @@ export const nativeMapSerializer: NativeTypeSerializer = {
   serialize(instance: Map<any, any>, trackerInfo: ChangeTrackerObjectInfo<any>) {
     const result: Record<string, any> = {};
     for (const [key, value] of instance.entries()) {
-      const propertyInfo = trackerInfo.createPropertyInfo(value);
+      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
       result[key] = propertyInfo;
     }
     return result;
@@ -47,7 +47,7 @@ export const nativeSetSerializer: NativeTypeSerializer = {
   serialize(instance: Set<any>, trackerInfo: ChangeTrackerObjectInfo<any>) {
     const result: Array<any> = [];
     for (const value of instance.values()) {
-      const propertyInfo = trackerInfo.createPropertyInfo(value);
+      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
       result.push(propertyInfo);
     }
     return result;

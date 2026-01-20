@@ -189,7 +189,7 @@ export declare class ChangeTrackerObjectInfo<T extends object> extends ObjectInf
 	 * If includeChangedOnly is true, only changed properties are included.
 	 */
 	private getProperties;
-	private serializePropertyInfo;
+	serializePropertyInfo(propertyInfo: PropertyInfo<T, keyof T>): PropertyInfo<T, keyof T>;
 	private serializeValue;
 	/**
 	 * Resets the hasPendingChanges flag for all properties and clears pending method calls.

@@ -203,8 +203,6 @@ This are the native serializers automatically provided:
   myMap.set(someTrackableValue);
   ```
 
-All native serializers will look no further than the first level, so you cant put an object that contains a tracked value inside any of those.
-
 In the case that this is not what is wanted, one can provide a list of native serializers when creating any ObjectSync instance:
 
 ```typescript

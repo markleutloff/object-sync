@@ -1337,13 +1337,13 @@ var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoB
       if (finalValue === nothing)
         return;
       const propertyInfo = this.createPropertyInfo(finalValue);
-      const clientPropertyInfo = this.serializePropertyInfo(key, propertyInfo, client);
+      const clientPropertyInfo = this.serializePropertyInfo(propertyInfo);
       if (clientPropertyInfo)
         result[key] = clientPropertyInfo;
     });
     return result;
   }
-  serializePropertyInfo(key, propertyInfo, client) {
+  serializePropertyInfo(propertyInfo) {
     let clientPropertyInfo = {
       objectId: propertyInfo.objectId,
       value: propertyInfo.value,
@@ -1634,8 +1634,8 @@ var nativeArraySerializer = {
   type: Array,
   typeId: "<NativeArray>",
   serialize(instance, trackerInfo) {
-    return mapIterable(instance, (item) => {
-      const propertyInfo = trackerInfo.createPropertyInfo(item);
+    return mapIterable(instance, (value) => {
+      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
       return propertyInfo;
     });
   },
@@ -1651,7 +1651,7 @@ var nativeMapSerializer = {
   serialize(instance, trackerInfo) {
     const result = {};
     for (const [key, value] of instance.entries()) {
-      const propertyInfo = trackerInfo.createPropertyInfo(value);
+      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
       result[key] = propertyInfo;
     }
     return result;
@@ -1670,7 +1670,7 @@ var nativeSetSerializer = {
   serialize(instance, trackerInfo) {
     const result = [];
     for (const value of instance.values()) {
-      const propertyInfo = trackerInfo.createPropertyInfo(value);
+      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
       result.push(propertyInfo);
     }
     return result;

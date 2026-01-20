@@ -5,9 +5,6 @@ import assert from "assert";
 @syncObject()
 class Alpha {
   @syncProperty()
-  accessor array: Beta[] = [];
-
-  @syncProperty()
   accessor otherArray: any[] = [];
 
   @syncProperty()
