@@ -1,6 +1,9 @@
-import { syncMethod, syncObject, syncProperty, ClientConnection, ObjectSync, getHostObjectInfo, nothing, TypeSerializer } from "../../src/index.js";
+import { syncMethod, syncObject, syncProperty, ClientConnection, ObjectSync, nothing, TypeSerializer, getTrackerObjectInfo } from "../../src/index.js";
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
+
+@syncObject()
+class SubTrackable {}
 
 @syncObject({
   beforeSendToClient({ instance, constructor, typeId, destinationClientConnection }) {
@@ -40,8 +43,16 @@ class Root {
   @syncProperty()
   accessor testClass: SerializableClass | undefined;
 
+  @syncProperty()
+  accessor array: SubTrackable[] = [];
+
   @syncMethod()
   async invoke(value: number): Promise<number> {
+    return value + value;
+  }
+
+  @syncMethod()
+  invokeSync(value: number): number {
     return value + value;
   }
 }
@@ -56,6 +67,16 @@ class ClientRoot {
 class ClassWithSubClass {
   @syncProperty()
   accessor value: ClientRoot = new ClientRoot();
+}
+
+@syncObject({
+  beforeSendToClient(payload) {
+    return nothing;
+  },
+})
+class NonOnClientClass {
+  @syncProperty()
+  accessor value: number = 0;
 }
 
 class SerializableClass {
@@ -96,7 +117,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 
     const clientSettings = {
       identity: "client",
-      typeGenerators: [Root, ClientRoot, ClassWithSubClass],
+      typeGenerators: [Root, ClientRoot, ClassWithSubClass, SubTrackable],
       ...defaultSettings,
     };
 
@@ -119,7 +140,31 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     assert.strictEqual(clientRoot.value, hostRoot.value);
   });
 
-  it("should report sub tracked classes ", async () => {
+  it("should report deletion to client", async () => {
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
+
+    hostObjectSync.untrack(hostRoot);
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+    const clientRoot2 = clientObjectSync.findObjectOfType(Root);
+    assert.notStrictEqual(clientRoot, clientRoot2);
+    assert.strictEqual(clientRoot2, null);
+  });
+
+  it("should handle native array", async () => {
+    hostRoot.array = [new SubTrackable(), new SubTrackable()];
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
+
+    assert.strictEqual(clientRoot.array.length, 2);
+    assert.strictEqual(clientRoot.array[0] instanceof SubTrackable, true);
+    assert.strictEqual(clientRoot.array[0] instanceof SubTrackable, true);
+    assert.notStrictEqual(clientRoot.array[0], hostRoot.array[0]);
+    assert.notStrictEqual(clientRoot.array[1], hostRoot.array[1]);
+  });
+
+  it("should report sub tracked classes", async () => {
     const classWithSubClass = new ClassWithSubClass();
     hostObjectSync.track(classWithSubClass);
 
@@ -130,6 +175,19 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 
     const clientSubClass = clientClassWithSubClass.value;
     assert.equal(!!clientSubClass, true);
+  });
+
+  it("should ignore changes and method calls when class will not be created on client", async () => {
+    const nonClientClass = new NonOnClientClass();
+    hostObjectSync.track(nonClientClass);
+
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+    const clientClass = clientObjectSync.findObjectOfType(NonOnClientClass)!;
+    assert.equal(clientClass, null);
+
+    nonClientClass.value = 55;
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
   });
 
   it("should report changes to client", async () => {
@@ -156,12 +214,11 @@ describe("ObjectSync client-host integration (objectSync)", () => {
 
   it("should execute methods on client", async () => {
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
-    const clientRoot = clientObjectSync.findObjectOfType(Root)!;
 
     const invokeArgument = 55;
     const expectedHostResult = invokeArgument + invokeArgument;
 
-    const { clientResults, hostResult } = getHostObjectInfo(hostRoot)!.invoke("invoke", invokeArgument);
+    const { clientResults, hostResult } = hostObjectSync.getInvokeProxy(hostRoot).invoke(invokeArgument);
 
     await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
     const clientInvokeResults = await clientResults;
@@ -169,6 +226,22 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     const hostResultValue = await hostResult;
 
     assert.strictEqual(hostResultValue, expectedHostResult);
+    assert.strictEqual(clientResult, expectedHostResult);
+  });
+
+  it("should execute non promise methods on client", async () => {
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+    const invokeArgument = 55;
+    const expectedHostResult = invokeArgument + invokeArgument;
+
+    const { clientResults, hostResult } = hostObjectSync.invoke(hostRoot, "invokeSync", invokeArgument);
+
+    await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+    const clientInvokeResults = await clientResults;
+    const clientResult = await clientInvokeResults.get(clientObjectSyncClientConnection)!;
+
+    assert.strictEqual(hostResult, expectedHostResult);
     assert.strictEqual(clientResult, expectedHostResult);
   });
 

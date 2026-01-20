@@ -1,7 +1,3 @@
-// export * from "./shared/index.js";
-// export * from "./applicator/index.js";
-// export * from "./tracker/index.js";
-
 export {
   type ObjectSyncMetaInfoCreateSettings,
   type MethodExecuteResult,
@@ -17,9 +13,14 @@ export {
   SyncableArray,
   SyncableObservableArray,
   TrackedObjectPool,
-  getHostObjectInfo,
+  getTrackerObjectInfo,
   getObjectSyncMetaInfo,
-  getClientObjectInfo,
+  getApplicatorObjectInfo,
+  type nativeTypeSerializers as nativeTypeGenerators,
+  type nativeArraySerializer as nativeArray,
+  type nativeMapSerializer as nativeMap,
+  type nativeSetSerializer as nativeSet,
+  type nativeObjectSerializer as nativeObject,
 } from "./shared/index.js";
 export {
   type ITrackableOnCreated,

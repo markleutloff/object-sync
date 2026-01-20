@@ -14,9 +14,9 @@ import { ensureObjectSyncMetaInfo, getObjectSyncMetaInfo } from "../shared/objec
 import { TrackedObjectPool } from "../shared/trackedObjectPool.js";
 import { invokeOnCreated, invokeOnDeleted, invokeOnUpdated, invokeOnUpdateProperty, invokeOnDelete } from "./trackableTarget.js";
 import { ApplicatorObjectInfo } from "./applicatorObjectInfo.js";
-import type { ClientConnection } from "../tracker/index.js";
+import type { ChangeTrackerObjectInfo, ClientConnection } from "../tracker/index.js";
 import { Constructor } from "../shared/types.js";
-
+import { NativeTypeSerializer } from "../shared/nativeTypeGenerators.js";
 
 export type TypeGenerator = Constructor | TrackableTargetGenerator;
 
@@ -49,11 +49,11 @@ export type TypeSerializer<T> = {
       /**
        * Function to deserialize a value.
        */
-      deserialize(value: any): T;
+      deserialize(value: any, applicator: ObjectChangeApplicator, clientConnection: ClientConnection): T;
       /**
        * Function to serialize an instance.
        */
-      serialize(instance: T): any;
+      serialize(instance: T, trackerInfo: ChangeTrackerObjectInfo<any>): any;
     }
 );
 
@@ -64,7 +64,6 @@ function isGeneratorConstructor(value: TypeGenerator): value is Constructor {
 }
 
 function isGeneratorTargetGenerator(value: TypeGenerator): value is TrackableTargetGenerator {
-  debugger;
   return true;
 }
 
@@ -73,6 +72,7 @@ export type ObjectChangeApplicatorSettings = {
   identity: string;
   typeGenerators: Map<string, TypeGenerator>;
   typeSerializers: Map<string, TypeSerializer<any>>;
+  nativeTypeSerializers: NativeTypeSerializer[];
 };
 
 type FinalObjectChangeApplicatorSettings = {
@@ -93,6 +93,7 @@ export class ObjectChangeApplicator {
   private readonly _settings: FinalObjectChangeApplicatorSettings;
   private readonly _typeGenerators: Map<string, TypeGenerator>;
   private readonly _typeSerializers: Map<string, TypeSerializer<any>>;
+  private readonly _nativeTypeSerializers: NativeTypeSerializer[];
 
   constructor(settings: ObjectChangeApplicatorSettings) {
     this._settings = {
@@ -101,6 +102,7 @@ export class ObjectChangeApplicator {
 
     this._trackedObjectPool = settings.objectPool;
     this._typeSerializers = settings.typeSerializers;
+    this._nativeTypeSerializers = settings.nativeTypeSerializers;
     this._typeGenerators = settings.typeGenerators;
   }
 
@@ -165,7 +167,7 @@ export class ObjectChangeApplicator {
   getPropertyValue(property: PropertyInfo<any, any>, clientConnection: ClientConnection): any {
     const { objectId, value, typeId } = property;
     if (typeId) {
-      return this.deserializeValue(typeId, value as object);
+      return this.deserializeValue(typeId, value as object, clientConnection);
     }
     if (objectId !== undefined && objectId !== null) {
       let tracked = this._trackedObjectPool.get(objectId);
@@ -200,7 +202,7 @@ export class ObjectChangeApplicator {
     const results: T[] = [];
     for (const tracked of this._trackedObjectPool.all) {
       if (tracked instanceof constructor) {
-        return results.push(tracked as T);
+        results.push(tracked as T);
       }
     }
     return results;
@@ -254,7 +256,7 @@ export class ObjectChangeApplicator {
       objectId: data.objectId,
       typeId: data.typeId,
     });
-    objectInfo.client = new ApplicatorObjectInfo<any>(objectInfo, this);
+    objectInfo.applicatorInfo = new ApplicatorObjectInfo<any>(objectInfo, this);
 
     if (!this._trackedObjectPool.has(result)) {
       this._trackedObjectPool.add(result);
@@ -388,12 +390,12 @@ export class ObjectChangeApplicator {
     }
   }
 
-  private deserializeValue(typeId: string, value: any) {
-    const generator = this._typeSerializers.get(typeId);
+  private deserializeValue(typeId: string, value: any, clientConnection: ClientConnection) {
+    const generator = this._typeSerializers.get(typeId) ?? this._nativeTypeSerializers.find((g) => g.typeId === typeId);
     if (!generator) {
       throw new Error(`No deserializer registered for typeId ${typeId}`);
     }
-    if (generator.deserialize) return generator.deserialize(value);
+    if (generator.deserialize) return generator.deserialize(value, this, clientConnection);
     else return new generator.type(value);
   }
 }

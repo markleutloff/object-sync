@@ -176,7 +176,7 @@ export function syncProperty<This extends object, Return>(settings?: TrackedProp
 
         if (isBeeingApplied || propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly") return;
 
-        const host = getObjectSyncMetaInfo(this as any)?.host;
+        const host = getObjectSyncMetaInfo(this as any)?.trackerInfo;
 
         if (host && checkCanTrackPropertyInfo(propertyInfo, this as any, propertyName, host)) {
           host.onPropertyChanged(context.name as any, value);
@@ -212,7 +212,7 @@ export function syncMethod<This extends object, Return>(settings?: TrackedMethod
 
       if (isBeeingApplied || methodInfo.mode === "none" || methodInfo.mode === "applyOnly") return result;
 
-      const hostInfo = getObjectSyncMetaInfo(this)?.host;
+      const hostInfo = getObjectSyncMetaInfo(this)?.trackerInfo;
       if (hostInfo && checkCanTrackPropertyInfo(methodInfo, this, methodName, hostInfo)) {
         hostInfo.onMethodExecute(context.name as any, args);
       }

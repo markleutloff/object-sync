@@ -37,7 +37,7 @@ export type ExecuteObjectMessage<T extends object> = MessageBase & {
   type: "execute";
   id: unknown;
   method: keyof T & string;
-  parameters: any[];
+  parameters: PropertyInfos<any, any>[];
 };
 
 export type Message<T extends object = object, TAdditionalPropertyInfo extends object = object> =

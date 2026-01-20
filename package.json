@@ -1,6 +1,6 @@
 {
   "name": "simple-object-sync",
-  "version": "1.1.8",
+  "version": "1.2.1",
   "type": "module",
   "repository": {
     "url": "https://github.com/markleutloff/object-sync"
@@ -29,6 +29,7 @@
     "build": "npm run build:tsc && npm run build:tsc:nocomments && npm run build:bundle && npm run build:bundle:dts",
     "test:ts:prepare": "tsc --project tests/ts/tsconfig.json",
     "test:ts": "tsx --test tests/ts/*.test.ts",
+    "test:ts:nativeGenerators": "tsx --test tests/ts/nativeGenerators.test.ts",
     "test:ts:objectSync": "tsx --test tests/ts/objectSync.test.ts",
     "test:ts:multiClient": "tsx --test tests/ts/multiClient.test.ts",
     "test:ts:worker": "tsx --test tests/ts/worker.test.ts",

@@ -20,11 +20,11 @@ export type ObjectSyncMetaInfo = {
   /**
    * The ApplicatorObjectInfo associated with the object, if any.
    */
-  client?: ApplicatorObjectInfo<any>;
+  applicatorInfo?: ApplicatorObjectInfo<any>;
   /**
    * The ChangeTrackerObjectInfo associated with the object, if any.
    */
-  host?: ChangeTrackerObjectInfo<any>;
+  trackerInfo?: ChangeTrackerObjectInfo<any>;
 };
 
 export function getObjectSyncMetaInfo(target: object): ObjectSyncMetaInfo | undefined {
@@ -75,10 +75,10 @@ export function ensureObjectSyncMetaInfo(settings: ObjectSyncMetaInfoCreateSetti
   return metaInfo;
 }
 
-export function getHostObjectInfo<T extends object>(obj: T): ChangeTrackerObjectInfo<T> | null {
-  return getObjectSyncMetaInfo(obj)?.host ?? null;
+export function getTrackerObjectInfo<T extends object>(obj: T): ChangeTrackerObjectInfo<T> | null {
+  return getObjectSyncMetaInfo(obj)?.trackerInfo ?? null;
 }
 
-export function getClientObjectInfo<T extends object>(obj: T): ApplicatorObjectInfo<T> | null {
-  return getObjectSyncMetaInfo(obj)?.client ?? null;
+export function getApplicatorObjectInfo<T extends object>(obj: T): ApplicatorObjectInfo<T> | null {
+  return getObjectSyncMetaInfo(obj)?.applicatorInfo ?? null;
 }

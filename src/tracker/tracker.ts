@@ -1,8 +1,16 @@
 import { TypeSerializer } from "../applicator/applicator.js";
-import { ChangeObjectMessage, CreateObjectMessage, DeleteObjectMessage, ExecuteObjectMessage, isPropertyInfo, Message, MethodExecuteResult, PropertyInfo, TrackedObjectPool } from "../shared/index.js";
-import { getHostObjectInfo } from "../shared/objectSyncMetaInfo.js";
+import { ChangeObjectMessage, CreateObjectMessage, ExecuteObjectMessage, isPropertyInfo, Message, MethodExecuteResult, PropertyInfo, TrackedObjectPool } from "../shared/index.js";
+import { NativeTypeSerializer } from "../shared/nativeTypeGenerators.js";
+import { getTrackerObjectInfo } from "../shared/objectSyncMetaInfo.js";
 import { Constructor, forEachIterable, OneOrMany } from "../shared/types.js";
 import { ClientFilter, ChangeTrackerObjectInfo, ChangeTrackerObjectSyncMetaInfoCreateSettings } from "./trackerObjectInfo.js";
+
+type GatherMessagesForObjectGraphArgs = {
+  object: object;
+  client: ClientConnection;
+  objectsToVisit: Set<object>;
+  messages: Message[];
+};
 
 export type TrackSettings = {
   /**
@@ -28,6 +36,7 @@ export type ObjectChangeTrackerSettings = {
   objectPool: TrackedObjectPool;
   identity: string;
   typeSerializers: Map<string, TypeSerializer<any>>;
+  nativeTypeSerializers: NativeTypeSerializer[];
 };
 
 type FinalObjectChangeTrackerSettings = {
@@ -62,11 +71,10 @@ export type ClientConnection = {
 export class ObjectChangeTracker {
   /** Pool of all currently tracked objects and their info. */
   private _trackedObjectPool: TrackedObjectPool;
-  /** Maps client IDs to lists of delete messages for objects that have been untracked. */
-  private _untrackedObjectInfosByClient = new Map<ClientConnection, DeleteObjectMessage[]>();
 
   private _clients: Set<ClientConnectionSettings> = new Set();
   private _serializers: Map<Constructor, TypeSerializer<any> & { typeId: string }> = new Map<Constructor, TypeSerializer<any> & { typeId: string }>();
+  private _nativeTypeSerializers: NativeTypeSerializer[] = [];
 
   private readonly _settings: FinalObjectChangeTrackerSettings;
 
@@ -82,6 +90,8 @@ export class ObjectChangeTracker {
       serializer.typeId = serializer.typeId ?? typeId;
       this.registerSerializer(serializer);
     });
+
+    this._nativeTypeSerializers = settings.nativeTypeSerializers;
   }
 
   get settings(): FinalObjectChangeTrackerSettings {
@@ -119,10 +129,9 @@ export class ObjectChangeTracker {
     }
 
     this._trackedObjectPool.all.forEach((obj) => {
-      const hostObjectInfo = getHostObjectInfo(obj)!;
+      const hostObjectInfo = getTrackerObjectInfo(obj)!;
       hostObjectInfo.onClientRemoved(client);
     });
-    this._untrackedObjectInfosByClient.delete(client);
 
     this._clients.delete(client);
   }
@@ -134,7 +143,7 @@ export class ObjectChangeTracker {
    * @param isExclusive If true, only the given clients can see the object; otherwise, all except these clients can see it.
    */
   setClientRestriction<T extends object>(obj: T, filter: ClientFilter): void {
-    const tracked = getHostObjectInfo(obj);
+    const tracked = getTrackerObjectInfo(obj);
     if (!tracked) throw new Error("Object is not tracked");
     tracked.setClientRestriction(filter);
   }
@@ -152,7 +161,7 @@ export class ObjectChangeTracker {
 
     const isRoot = trackSettings?.isRoot !== false;
 
-    let hostObjectInfo: ChangeTrackerObjectInfo<T> | null = getHostObjectInfo(target);
+    let hostObjectInfo: ChangeTrackerObjectInfo<T> | null = getTrackerObjectInfo(target);
     if (!hostObjectInfo) {
       const creationSettings: ChangeTrackerObjectSyncMetaInfoCreateSettings<T> = {
         objectId: trackSettings?.objectId,
@@ -162,19 +171,11 @@ export class ObjectChangeTracker {
         owner: this,
       };
 
-      hostObjectInfo = getHostObjectInfo(target) ?? ChangeTrackerObjectInfo.create<T>(creationSettings);
+      hostObjectInfo = getTrackerObjectInfo(target) ?? ChangeTrackerObjectInfo.create<T>(creationSettings);
       if (!hostObjectInfo) return null;
 
       if (!this._trackedObjectPool.has(target)) this._trackedObjectPool.add(target);
 
-      this._untrackedObjectInfosByClient.forEach((deleteMessages, client) => {
-        let deleteMessageIndex = deleteMessages.findIndex((m) => m.objectId === hostObjectInfo!.objectId);
-        if (deleteMessageIndex === -1) return;
-        deleteMessages.splice(deleteMessageIndex, 1);
-        if (deleteMessages.length === 0) {
-          this._untrackedObjectInfosByClient.delete(client);
-        }
-      });
       if (trackSettings?.clientVisibility) {
         this.setClientRestriction(target, trackSettings.clientVisibility);
       }
@@ -199,11 +200,11 @@ export class ObjectChangeTracker {
    * If an object is passed instead of a TrackableObject, it will first be looked up.
    */
   untrack<T extends object>(target: T): void {
-    if (this.untrackInternal(target, true)) this.removeUnusedObjects();
+    this.untrackInternal(target, true);
   }
 
   private untrackInternal<T extends object>(target: T, throwWhenNotTracked: boolean) {
-    const hostObjectInfo = getHostObjectInfo(target)!;
+    const hostObjectInfo = getTrackerObjectInfo(target)!;
     if (!this._trackedObjectPool.has(target) || !hostObjectInfo) {
       if (throwWhenNotTracked) {
         throw new Error("Object is not tracked");
@@ -211,219 +212,171 @@ export class ObjectChangeTracker {
       return false;
     }
 
-    this._trackedObjectPool.delete(target);
-    const clients = Array.from(hostObjectInfo.clients);
-    const deleteMessage = hostObjectInfo.getDeleteMessage();
-    clients.forEach((client) => {
-      let deleteMessages = this._untrackedObjectInfosByClient.get(client);
-      if (!deleteMessages) {
-        deleteMessages = [];
-        this._untrackedObjectInfosByClient.set(client, deleteMessages);
-      }
-      deleteMessages.push(deleteMessage);
-    });
+    hostObjectInfo.isRootObject = false; // when the object is really not tracked it will be finally removed once the next tick happens
+
     return true;
   }
 
-  /**
-   * For a given message, finds and tracks any nested objects referenced by objectId/value pairs.
-   * Removes the value from the property after tracking.
-   * @returns Array of HostTrackableObjectInfo for any new objects tracked.
-   */
-  private gatherUntrackedObjectInfos(data: ChangeObjectMessage<any> | CreateObjectMessage<any>) {
-    return this.gatherUntrackedObjectInfosFromRaw(data.properties);
+  getMessages(clientOrClients?: OneOrMany<ClientConnection>): Map<ClientConnection, Message[]> {
+    clientOrClients ??= this._clients;
+
+    const result = new Map<ClientConnection, Message[]>();
+    forEachIterable(clientOrClients, (client) => {
+      const initialTrackedObjects = this._trackedObjectPool.allMetaInfos.filter((o) => o.trackerInfo?.isRootObject).map((o) => o.object);
+      const allTrackedObjectsForClient = this._trackedObjectPool.allMetaInfos.filter((o) => o.trackerInfo?.clients.has(client)).map((o) => o.object);
+      const objectsToVisit: Set<object> = new Set([...initialTrackedObjects]);
+      let messages: Message[] = [];
+
+      for (const obj of objectsToVisit) {
+        this.gatherMessagesForObjectGraph({
+          object: obj,
+          client,
+          objectsToVisit,
+          messages,
+        });
+      }
+
+      const noLongerTrackedByClient = allTrackedObjectsForClient.filter((o) => {
+        if (objectsToVisit.has(o)) return false;
+        return true;
+      });
+
+      for (const obj of noLongerTrackedByClient) {
+        const hostObjectInfo = getTrackerObjectInfo(obj);
+        if (!hostObjectInfo) continue;
+        hostObjectInfo.onClientRemoved(client);
+        messages.push(hostObjectInfo.getDeleteMessage());
+      }
+
+      result.set(client, messages);
+    });
+
+    return result;
   }
 
-  private gatherUntrackedObjectInfosFromRaw(data: object | Array<any>, tracked: Set<object> = new Set()): object[] {
-    if (tracked.has(data)) {
-      return [];
-    }
-    tracked.add(data);
+  private gatherMessagesForObjectGraph(args: GatherMessagesForObjectGraphArgs) {
+    const hostObjectInfo = getTrackerObjectInfo(args.object);
+    if (!hostObjectInfo) return;
+    if (!hostObjectInfo?.isForClient(args.client)) return;
 
-    const result: object[] = [];
-
-    if (isPropertyInfo(data)) {
-      const propertyInfo = data as PropertyInfo<any, any>;
-      if (propertyInfo.objectId && propertyInfo.value) {
-        const newTrackable = this.trackInternal(propertyInfo.value, { isRoot: false });
-        delete propertyInfo.value;
-        if (newTrackable) {
-          result.push(newTrackable.object);
-        }
+    const isKnownToClient = hostObjectInfo.clients.has(args.client);
+    const subMessages: Message[] = [];
+    if (!isKnownToClient) {
+      const createMessage = hostObjectInfo.getCreateMessage(args.client);
+      if (createMessage !== null) {
+        hostObjectInfo.clients.add(args.client);
+        subMessages.push(createMessage);
+      }
+    } else {
+      const updateMessage = hostObjectInfo.getChangeMessage(args.client);
+      if (updateMessage !== null) {
+        subMessages.push(updateMessage);
       }
     }
 
-    if (Array.isArray(data)) {
+    const executeMessages = hostObjectInfo.getExecuteMessages(args.client) as ExecuteObjectMessage<object>[];
+    subMessages.push(...executeMessages);
+    args.messages.push(...subMessages);
+
+    for (const message of subMessages) {
+      this.gatherSubTrackablesForGraphFromMessage(message, args);
+    }
+  }
+
+  private gatherSubTrackablesForGraphFromMessage(message: Message, args: GatherMessagesForObjectGraphArgs) {
+    let valuesToScan: PropertyInfo<any, any>[] = [];
+    if (message.type === "create" || message.type === "change") {
+      const properties = (message as CreateObjectMessage<any> | ChangeObjectMessage<any>).properties;
+      Object.values(properties).map((propertyInfo) => {
+        if (propertyInfo) valuesToScan.push(propertyInfo);
+      });
+    } else if (message.type === "execute") {
+      const parameters = (message as ExecuteObjectMessage<any>).parameters;
+      Object.values(parameters).map((parameterInfo) => {
+        if (parameterInfo) valuesToScan.push(parameterInfo);
+      });
+    }
+
+    for (const propertyInfo of valuesToScan) {
+      this.gatherSubTrackablesForGraphFromValue(propertyInfo, args);
+      if (propertyInfo.objectId && propertyInfo.value) {
+        args.objectsToVisit.add(propertyInfo.value);
+        delete propertyInfo.value;
+      }
+    }
+  }
+
+  private gatherSubTrackablesForGraphFromValue(data: any, args: GatherMessagesForObjectGraphArgs, visitedValues: Set<any> = new Set()): void {
+    if (data === undefined || data === null || typeof data !== "object" || visitedValues.has(data)) return;
+
+    visitedValues.add(data);
+
+    if (isPropertyInfo(data)) {
+      const isTrackable = data.objectId && data.value !== undefined;
+      const isUntrackableObjectOrArray = !isTrackable && data.value && typeof data.value === "object";
+      if (isTrackable) {
+        this.trackInternal(data.value, { isRoot: false });
+        args.objectsToVisit.add(data.value);
+        delete data.value; // remove the value as the objectId now points to it
+      } else if (isUntrackableObjectOrArray) {
+        this.gatherSubTrackablesForGraphFromValue(data.value, args, visitedValues);
+      }
+    } else if (Array.isArray(data)) {
       data.forEach((value) => {
         if (!value || typeof value !== "object") return;
 
-        result.push(...this.gatherUntrackedObjectInfosFromRaw(value, tracked));
+        this.gatherSubTrackablesForGraphFromValue(value, args, visitedValues);
       });
-      return result;
-    }
-
-    Object.keys(data).forEach((key) => {
-      const value = (data as any)[key];
-
-      if (!value || typeof value !== "object") return;
-
-      if (!isPropertyInfo(value)) {
-        result.push(...this.gatherUntrackedObjectInfosFromRaw(value, tracked));
-        return;
-      }
-
-      const propertyInfo = value as PropertyInfo<any, any>;
-      if (propertyInfo.objectId && propertyInfo.value) {
-        const newTrackable = this.trackInternal(propertyInfo.value, { isRoot: false });
-        delete propertyInfo.value;
-        if (newTrackable) {
-          result.push(newTrackable.object);
-        }
-      }
-
-      if (propertyInfo.value && typeof propertyInfo.value === "object") {
-        result.push(...this.gatherUntrackedObjectInfosFromRaw(propertyInfo.value, tracked));
-      }
-    });
-    return result;
-  }
-
-  getMessages(tick: boolean = true): Map<ClientConnection, Message[]> {
-    const result = new Map<ClientConnection, Message[]>();
-    for (const client of this._clients) {
-      result.set(client, this.getMessagesForClientInternal(client));
-    }
-    if (tick) this.tick();
-    return result;
-  }
-
-  /**
-   * Internal: Gathers all messages for a client.
-   */
-  private getMessagesForClientInternal(client: ClientConnection): Message[] {
-    const messages: Message[] = [];
-    let all = this._trackedObjectPool.all;
-    let newTrackableObjects: object[] = [];
-    while (all.length > 0) {
-      newTrackableObjects = [];
-      all.forEach((obj) => {
-        this.getMessagesForTrackableObjectInfo(obj, client, messages, newTrackableObjects);
-      });
-      all = newTrackableObjects;
-    }
-
-    this._untrackedObjectInfosByClient.forEach((deleteMessages, c) => {
-      if (c === client) {
-        messages.push(...deleteMessages);
-        this._untrackedObjectInfosByClient.delete(client);
-      }
-    });
-    return messages;
-  }
-
-  /**
-   * Internal: Adds create/change/execute messages for a tracked object to the outgoing message list for a client.
-   * Also tracks any nested objects referenced in the message.
-   */
-  private getMessagesForTrackableObjectInfo(syncObject: object, client: ClientConnection, messages: Message[], newTrackableObjects: object[]): void {
-    const hostObjectInfo = getHostObjectInfo(syncObject);
-    if (!hostObjectInfo?.isForClient(client)) return;
-
-    const hasClient = hostObjectInfo.clients.has(client);
-    let message: Message | null;
-    if (!hasClient) {
-      message = hostObjectInfo.getCreateMessage(client);
-      if (message !== null) {
-        hostObjectInfo.clients.add(client);
-      }
     } else {
-      message = hostObjectInfo.getChangeMessage(client);
-    }
-    if (message !== null) {
-      newTrackableObjects.push(...this.gatherUntrackedObjectInfos(message));
-      messages.push(message);
-    }
+      Object.keys(data).forEach((key) => {
+        const value = (data as any)[key];
 
-    const executeMessages = hostObjectInfo.getExecuteMessages(client) as ExecuteObjectMessage<object>[];
-    messages.push(...executeMessages);
+        if (!value || typeof value !== "object") return;
+
+        this.gatherSubTrackablesForGraphFromValue(value, args, visitedValues);
+      });
+    }
   }
 
   public applyClientMethodInvokeResults(client: ClientConnection, methodExecuteResults: MethodExecuteResult[]) {
     for (const result of methodExecuteResults) {
       const tracked = this._trackedObjectPool.get(result.objectId);
       if (!tracked) continue;
-      const hostObjectInfo = getHostObjectInfo(tracked);
+      const hostObjectInfo = getTrackerObjectInfo(tracked);
       hostObjectInfo?.onClientMethodExecuteResultReceived(result, client);
     }
   }
 
-  private tick(): void {
-    this._trackedObjectPool.all.forEach((obj) => {
-      const hostObjectInfo = getHostObjectInfo(obj)!;
-      hostObjectInfo?.tick();
+  tick(): void {
+    this._trackedObjectPool.allMetaInfos.forEach((meta) => {
+      const hostObjectInfo = meta.trackerInfo;
+      if (!hostObjectInfo) return;
+
+      // Finalize possible deleted tracked objects
+      if (!hostObjectInfo.isRootObject && hostObjectInfo.clients.size === 0) {
+        meta.trackerInfo?.onClientRemoved;
+        this._trackedObjectPool.deleteById(meta.objectId);
+        return;
+      }
+
+      // Everything else may advance its state
+      hostObjectInfo.tick();
     });
   }
 
-  /**
-   * Removes all tracked objects that are not reachable from any of the provided root objects.
-   * Traverses the object graph starting from the roots and untracks all unreachable objects.
-   */
-  private removeUnusedObjects(): void {
-    // Set of reachable TrackableObjects
-    const reachable = new Set<object>();
-    const stack: object[] = [];
-
-    // Helper to add an object to the stack if not already visited
-    const visit = (obj: object) => {
-      if (!reachable.has(obj)) {
-        reachable.add(obj);
-        stack.push(obj);
-      }
-    };
-
-    // Initialize stack with all root objects
-    const allRootObjects = this._trackedObjectPool.all.filter((info) => {
-      const hostObjectInfo = getHostObjectInfo(info)!;
-      return hostObjectInfo.isRootObject;
-    });
-    for (const root of allRootObjects) {
-      visit(root);
+  serializeValue(value: object, trackerInfo: ChangeTrackerObjectInfo<any>): { value: any; typeId: string } | null {
+    let serializer = this._serializers.get(value.constructor as Constructor) ?? this._nativeTypeSerializers.find((g) => value instanceof g.type);
+    if (!serializer) {
+      return null;
     }
-
-    // Traverse the object graph
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-      const hostObjectInfo = getHostObjectInfo(current)!;
-
-      const properties = hostObjectInfo.properties;
-      // Check all properties of the current object for references to other trackable objects
-      for (const key of Object.keys(properties)) {
-        const value = (properties as any)[key]!.value;
-        if (value && typeof value === "object") {
-          visit(value);
-        }
-      }
-    }
-
-    // Untrack all objects that are not reachable
-    for (const tracked of this._trackedObjectPool.all) {
-      if (!reachable.has(tracked)) {
-        this.untrackInternal(tracked, false);
-      }
-    }
-  }
-
-  serializeValue(value: object): { value: any; typeId: string } | null {
-    const serializer = this._serializers.get(value.constructor as Constructor);
-    if (!serializer) return null;
     return {
       value: serializer.serialize
-        ? serializer.serialize(value)
+        ? serializer.serialize(value, trackerInfo)
         : "toJSON" in value && typeof value.toJSON === "function"
-        ? value.toJSON()
-        : "toValue" in value && typeof value.toValue === "function"
-        ? value.toValue()
-        : value,
+          ? value.toJSON()
+          : "toValue" in value && typeof value.toValue === "function"
+            ? value.toValue()
+            : value,
       typeId: serializer.typeId,
     };
   }

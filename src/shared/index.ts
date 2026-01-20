@@ -5,3 +5,4 @@ export * from "./syncableArray.js";
 export * from "./syncableObservableArray.js";
 export * from "./objectSyncMetaInfo.js";
 export * from "../objectSync/index.js";
+export * from "./nativeTypeGenerators.js";

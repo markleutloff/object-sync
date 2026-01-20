@@ -10,6 +10,12 @@ type PropertyChanges<T> = { [K in keyof T]?: { value: T[K]; hasPendingChanges: b
 
 type TResult<T, K extends keyof T> = T[K] extends (...args: any[]) => any ? ReturnType<T[K]> : never;
 
+export type SyncMethodInvokeResult<T, K extends keyof T> = { clientResults: MethodCallResult<TResult<T, K>>; hostResult: TResult<T, K> };
+
+export type SyncCallProxy<T> = {
+  [P in keyof T & string as T[P] extends (...args: any[]) => any ? P : never]: T[P] extends (...args: infer A) => any ? (...args: A) => SyncMethodInvokeResult<T, P> : never;
+};
+
 let nextInvokeId = 0;
 
 export type ClientFilter = {
@@ -82,14 +88,14 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
       throw new Error("Failed to create HostObjectInfo: unable to ensure ObjectSyncMetaInfo.");
     }
 
-    if (metaInfo.host) return metaInfo.host;
+    if (metaInfo.trackerInfo) return metaInfo.trackerInfo;
 
-    metaInfo.host = new ChangeTrackerObjectInfo<T>(metaInfo, settings.owner, settings.isRoot, settings.objectIdPrefix);
-    invokeOnConvertedToTrackable(metaInfo.object as T, metaInfo.host);
+    metaInfo.trackerInfo = new ChangeTrackerObjectInfo<T>(metaInfo, settings.owner, settings.isRoot, settings.objectIdPrefix);
+    invokeOnConvertedToTrackable(metaInfo.object as T, metaInfo.trackerInfo);
     trackableTypeInfo.trackedProperties.forEach((propertyInfo, key) => {
-      metaInfo.host!.onPropertyChanged(key as keyof T, (settings.object as any)[key]);
+      metaInfo.trackerInfo!.onPropertyChanged(key as keyof T, (settings.object as any)[key]);
     });
-    return metaInfo.host!;
+    return metaInfo.trackerInfo!;
   }
 
   /** Holds the current set of property changes for this object. */
@@ -102,17 +108,24 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   /** Holds the set of clients which know about this. */
   private _clients: Set<ClientConnection> = new Set();
 
+  private _invokeProxy: SyncCallProxy<T> | null = null;
+
   private _lastMethodCallResult: MethodCallResult<any> | null = null;
 
   /**
    * Constructs a TrackableObject with a typeId and optional objectId.
    */
-  private constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, private readonly _host: ObjectChangeTracker, private _isRootObject: boolean, private readonly _objectIdPrefix: string) {
+  private constructor(
+    objectSyncMetaInfo: ObjectSyncMetaInfo,
+    private readonly _tracker: ObjectChangeTracker,
+    private _isRootObject: boolean,
+    private readonly _objectIdPrefix: string,
+  ) {
     super(objectSyncMetaInfo);
   }
 
-  get host() {
-    return this._host;
+  get tracker() {
+    return this._tracker;
   }
 
   get clients(): Set<ClientConnection> {
@@ -128,6 +141,20 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
 
   get properties() {
     return this._changeSet;
+  }
+
+  get invokeProxy() {
+    return (this._invokeProxy ??= new Proxy(this.object, {
+      get: (obj, prop) => {
+        const value = (obj as any)[prop];
+        if (typeof value === "function" && typeof prop === "string") {
+          return (...args: any[]) => {
+            return this.invoke(prop as keyof T, ...(args as any));
+          };
+        }
+        return value;
+      },
+    }) as unknown as SyncCallProxy<T>);
   }
 
   /**
@@ -184,7 +211,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   createPropertyInfo(value: any): PropertyInfo<T, keyof T> {
     const trackable = this.convertToTrackableObjectReference(value);
     const paramInfo: PropertyInfo<any, any> = {
-      value: /*trackable ?? */value,
+      value: /*trackable ?? */ value,
       objectId: trackable?.objectSyncMetaInfo.objectId,
       [isPropertyInfoSymbol]: true,
     };
@@ -230,17 +257,10 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
     return result as MethodCallResult<TResult<T, K>> | null;
   }
 
-  invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): { clientResults: MethodCallResult<TResult<T, K>>; hostResult: TResult<T, K> } {
+  invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): SyncMethodInvokeResult<T, K> {
     const hostResult = (this.object as any)[method](...args) as TResult<T, K>;
     const clientResults = this.getInvokeResults<K>(method)!;
     return { clientResults, hostResult };
-  }
-
-  private onClientMethodExecuteSendToClient(client: ClientConnection, invokeId: unknown) {
-    const pendingCall = this._pendingMethodInvokeCalls.get(invokeId);
-    if (!pendingCall) return;
-
-    pendingCall.remainingClients.push(client);
   }
 
   onClientMethodExecuteResultReceived(methodExecuteResult: MethodExecuteResult, client: ClientConnection) {
@@ -256,7 +276,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
           } else {
             reject(methodExecuteResult.error);
           }
-        })
+        }),
       );
     }
 
@@ -276,7 +296,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
         object: target,
         isRoot: false,
         objectIdPrefix: this._objectIdPrefix,
-        owner: this.host,
+        owner: this.tracker,
       });
     }
     return null;
@@ -309,7 +329,6 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
       type: "delete",
       objectId: this.objectId,
     };
-    this.cancelPendingMethodCalls();
     return result;
   }
 
@@ -330,7 +349,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
             objectId: this.objectId,
             result: undefined,
           },
-          client
+          client,
         );
       });
     });
@@ -341,6 +360,10 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
    * Returns null if there are no changes.
    */
   getChangeMessage(client: ClientConnection): ChangeObjectMessage<T> | null {
+    if (!this.clients.has(client)) {
+      return null;
+    }
+
     const properties = this.getProperties(client, true);
     if (Object.keys(properties).length === 0) return null;
     const result: ChangeObjectMessage<T> = {
@@ -356,6 +379,11 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
    */
   getExecuteMessages(client: ClientConnection): ExecuteObjectMessage<T>[] {
     const result: ExecuteObjectMessage<T>[] = [];
+
+    if (!this.clients.has(client)) {
+      return result;
+    }
+
     for (const methodExecuteCall of this._methodInvokeCalls) {
       const args = methodExecuteCall.parameters.slice();
       if (beforeExecuteOnClient(this.object.constructor as Constructor, this.object, methodExecuteCall.method, args, client) === false) {
@@ -417,7 +445,7 @@ export class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
   }
 
   private serializeValue(value: object) {
-    return this.host.serializeValue(value);
+    return this.tracker.serializeValue(value, this);
   }
 
   /**

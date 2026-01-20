@@ -1,4 +1,4 @@
-import { syncMethod, syncObject, syncProperty, ClientConnection, ObjectSync, getHostObjectInfo, nothing, TypeSerializer } from "../../src/index.js";
+import { syncMethod, syncObject, syncProperty, ClientConnection, ObjectSync } from "../../src/index.js";
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
 

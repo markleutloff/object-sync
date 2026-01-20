@@ -36,7 +36,7 @@ export type ExecuteObjectMessage<T extends object> = MessageBase & {
 	type: "execute";
 	id: unknown;
 	method: keyof T & string;
-	parameters: any[];
+	parameters: PropertyInfos<any, any>[];
 };
 export type Message<T extends object = object, TAdditionalPropertyInfo extends object = object> = DeleteObjectMessage | CreateObjectMessage<T, TAdditionalPropertyInfo> | ChangeObjectMessage<T, TAdditionalPropertyInfo> | ExecuteObjectMessage<T>;
 export type MethodExecuteResult = {
@@ -58,6 +58,14 @@ export type OneOrMany<T> = T | Iterable<T>;
 export type Constructor<T = any> = {
 	new (...args: any[]): T;
 };
+export type NativeTypeSerializer = TypeSerializer<any> & {
+	typeId: string;
+};
+declare const nativeArraySerializer: NativeTypeSerializer;
+declare const nativeMapSerializer: NativeTypeSerializer;
+declare const nativeSetSerializer: NativeTypeSerializer;
+declare const nativeObjectSerializer: NativeTypeSerializer;
+declare const nativeTypeSerializers: NativeTypeSerializer[];
 export type PropertyChanges<T> = {
 	[K in keyof T]?: {
 		value: T[K];
@@ -65,6 +73,13 @@ export type PropertyChanges<T> = {
 	};
 };
 export type TResult<T, K extends keyof T> = T[K] extends (...args: any[]) => any ? ReturnType<T[K]> : never;
+export type SyncMethodInvokeResult<T, K extends keyof T> = {
+	clientResults: MethodCallResult<TResult<T, K>>;
+	hostResult: TResult<T, K>;
+};
+export type SyncCallProxy<T> = {
+	[P in keyof T & string as T[P] extends (...args: any[]) => any ? P : never]: T[P] extends (...args: infer A) => any ? (...args: A) => SyncMethodInvokeResult<T, P> : never;
+};
 export type ClientFilter = {
 	/**
 	 * Set of clients to include or exclude
@@ -92,7 +107,7 @@ export type MethodCallResult<T> = Promise<MethodCallResultByClient<T>>;
  * It manages property changes, client-specific views, and message generation for create, change, delete, and execute operations.
  */
 export declare class ChangeTrackerObjectInfo<T extends object> extends ObjectInfoBase {
-	private readonly _host;
+	private readonly _tracker;
 	private _isRootObject;
 	private readonly _objectIdPrefix;
 	/**
@@ -109,16 +124,18 @@ export declare class ChangeTrackerObjectInfo<T extends object> extends ObjectInf
 	private _clientFilters;
 	/** Holds the set of clients which know about this. */
 	private _clients;
+	private _invokeProxy;
 	private _lastMethodCallResult;
 	/**
 	 * Constructs a TrackableObject with a typeId and optional objectId.
 	 */
 	private constructor();
-	get host(): ObjectChangeTracker;
+	get tracker(): ObjectChangeTracker;
 	get clients(): Set<ClientConnection>;
 	get isRootObject(): boolean;
 	set isRootObject(value: boolean);
 	get properties(): PropertyChanges<T>;
+	get invokeProxy(): SyncCallProxy<T>;
 	/**
 	 * Determines if this object is visible to a given client based on filters.
 	 */
@@ -141,11 +158,7 @@ export declare class ChangeTrackerObjectInfo<T extends object> extends ObjectInf
 	 */
 	onMethodExecute(method: keyof T, parameters: any[]): Promise<Map<ClientConnection, Promise<T>>>;
 	getInvokeResults<K extends keyof T = any>(method?: K): MethodCallResult<TResult<T, K>> | null;
-	invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): {
-		clientResults: MethodCallResult<TResult<T, K>>;
-		hostResult: TResult<T, K>;
-	};
-	private onClientMethodExecuteSendToClient;
+	invoke<K extends keyof T>(method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): SyncMethodInvokeResult<T, K>;
 	onClientMethodExecuteResultReceived(methodExecuteResult: MethodExecuteResult, client: ClientConnection): void;
 	/**
 	 * Converts a value to a trackable object reference if possible.
@@ -203,6 +216,7 @@ export type ObjectChangeTrackerSettings = {
 	objectPool: TrackedObjectPool;
 	identity: string;
 	typeSerializers: Map<string, TypeSerializer<any>>;
+	nativeTypeSerializers: NativeTypeSerializer[];
 };
 export type FinalObjectChangeTrackerSettings = {
 	objectIdPrefix: string;
@@ -233,10 +247,9 @@ export type ClientConnection = {
 export declare class ObjectChangeTracker {
 	/** Pool of all currently tracked objects and their info. */
 	private _trackedObjectPool;
-	/** Maps client IDs to lists of delete messages for objects that have been untracked. */
-	private _untrackedObjectInfosByClient;
 	private _clients;
 	private _serializers;
+	private _nativeTypeSerializers;
 	private readonly _settings;
 	constructor(settings: ObjectChangeTrackerSettings);
 	get settings(): FinalObjectChangeTrackerSettings;
@@ -270,31 +283,13 @@ export declare class ObjectChangeTracker {
 	 */
 	untrack<T extends object>(target: T): void;
 	private untrackInternal;
-	/**
-	 * For a given message, finds and tracks any nested objects referenced by objectId/value pairs.
-	 * Removes the value from the property after tracking.
-	 * @returns Array of HostTrackableObjectInfo for any new objects tracked.
-	 */
-	private gatherUntrackedObjectInfos;
-	private gatherUntrackedObjectInfosFromRaw;
-	getMessages(tick?: boolean): Map<ClientConnection, Message[]>;
-	/**
-	 * Internal: Gathers all messages for a client.
-	 */
-	private getMessagesForClientInternal;
-	/**
-	 * Internal: Adds create/change/execute messages for a tracked object to the outgoing message list for a client.
-	 * Also tracks any nested objects referenced in the message.
-	 */
-	private getMessagesForTrackableObjectInfo;
+	getMessages(clientOrClients?: OneOrMany<ClientConnection>): Map<ClientConnection, Message[]>;
+	private gatherMessagesForObjectGraph;
+	private gatherSubTrackablesForGraphFromMessage;
+	private gatherSubTrackablesForGraphFromValue;
 	applyClientMethodInvokeResults(client: ClientConnection, methodExecuteResults: MethodExecuteResult[]): void;
-	private tick;
-	/**
-	 * Removes all tracked objects that are not reachable from any of the provided root objects.
-	 * Traverses the object graph starting from the roots and untracks all unreachable objects.
-	 */
-	private removeUnusedObjects;
-	serializeValue(value: object): {
+	tick(): void;
+	serializeValue(value: object, trackerInfo: ChangeTrackerObjectInfo<any>): {
 		value: any;
 		typeId: string;
 	} | null;
@@ -430,11 +425,11 @@ export type TypeSerializer<T> = {
 	/**
 	 * Function to deserialize a value.
 	 */
-	deserialize(value: any): T;
+	deserialize(value: any, applicator: ObjectChangeApplicator, clientConnection: ClientConnection): T;
 	/**
 	 * Function to serialize an instance.
 	 */
-	serialize(instance: T): any;
+	serialize(instance: T, trackerInfo: ChangeTrackerObjectInfo<any>): any;
 });
 export declare const allTypeGenerators: Map<string, TypeGenerator>;
 export type ObjectChangeApplicatorSettings = {
@@ -442,6 +437,7 @@ export type ObjectChangeApplicatorSettings = {
 	identity: string;
 	typeGenerators: Map<string, TypeGenerator>;
 	typeSerializers: Map<string, TypeSerializer<any>>;
+	nativeTypeSerializers: NativeTypeSerializer[];
 };
 export type FinalObjectChangeApplicatorSettings = {
 	identity: string;
@@ -457,6 +453,7 @@ export declare class ObjectChangeApplicator {
 	private readonly _settings;
 	private readonly _typeGenerators;
 	private readonly _typeSerializers;
+	private readonly _nativeTypeSerializers;
 	constructor(settings: ObjectChangeApplicatorSettings);
 	get settings(): FinalObjectChangeApplicatorSettings;
 	get identity(): string;
@@ -468,7 +465,7 @@ export declare class ObjectChangeApplicator {
 	 */
 	getPropertyValue(property: PropertyInfo<any, any>, clientConnection: ClientConnection): any;
 	findObjectOfType<T extends object>(constructor: Constructor<T>, objectId?: unknown): T | null;
-	findObjectsOfType<T extends object>(constructor: Constructor<T>): number | T[];
+	findObjectsOfType<T extends object>(constructor: Constructor<T>): T[];
 	get allTrackedObjects(): object[];
 	private deleteTrackedObject;
 	private constructObject;
@@ -479,9 +476,9 @@ export declare class ObjectChangeApplicator {
 	private deserializeValue;
 }
 export declare class ApplicatorObjectInfo<T extends object> extends ObjectInfoBase {
-	private readonly _client;
-	constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, _client: ObjectChangeApplicator);
-	get client(): ObjectChangeApplicator;
+	private readonly _applicator;
+	constructor(objectSyncMetaInfo: ObjectSyncMetaInfo, _applicator: ObjectChangeApplicator);
+	get applicator(): ObjectChangeApplicator;
 }
 export type ObjectSyncMetaInfo = {
 	/**
@@ -499,11 +496,11 @@ export type ObjectSyncMetaInfo = {
 	/**
 	 * The ApplicatorObjectInfo associated with the object, if any.
 	 */
-	client?: ApplicatorObjectInfo<any>;
+	applicatorInfo?: ApplicatorObjectInfo<any>;
 	/**
 	 * The ChangeTrackerObjectInfo associated with the object, if any.
 	 */
-	host?: ChangeTrackerObjectInfo<any>;
+	trackerInfo?: ChangeTrackerObjectInfo<any>;
 };
 export declare function getObjectSyncMetaInfo(target: object): ObjectSyncMetaInfo | undefined;
 export type ObjectSyncMetaInfoCreateSettings<T extends object = object> = {
@@ -516,8 +513,8 @@ export type ObjectSyncMetaInfoCreateSettings<T extends object = object> = {
 	typeId: string;
 	objectId: unknown;
 });
-export declare function getHostObjectInfo<T extends object>(obj: T): ChangeTrackerObjectInfo<T> | null;
-export declare function getClientObjectInfo<T extends object>(obj: T): ApplicatorObjectInfo<T> | null;
+export declare function getTrackerObjectInfo<T extends object>(obj: T): ChangeTrackerObjectInfo<T> | null;
+export declare function getApplicatorObjectInfo<T extends object>(obj: T): ApplicatorObjectInfo<T> | null;
 export declare class TrackedObjectPool {
 	private _trackedObjectInfos;
 	add(object: object): void;
@@ -656,6 +653,12 @@ export type ObjectSyncSettings = {
 	 * Can be provided as a Map of type IDs to serializers or as an array of serializers.
 	 */
 	typeSerializers?: Map<string, TypeSerializer<any>> | TypeSerializer<any>[];
+	/**
+	 * Native type serializers to use for serializing and deserializing native types during synchronization.
+	 * Can be provided as an array of native type serializers.
+	 * When not provided, default native type serializers will be used.
+	 */
+	nativeTypeSerializers?: NativeTypeSerializer[];
 };
 /**
  * Main class for synchronizing objects between a host and clients.
@@ -664,12 +667,55 @@ export declare class ObjectSync {
 	private readonly _tracker;
 	private readonly _applicator;
 	private readonly _settings;
+	private readonly _objectPool;
 	constructor(settings: ObjectSyncSettings);
 	/**
-	 * Gets all messages to be sent to clients. Will also reset internal tracking states.
+	 * Gets all messages to be sent to clients.
+	 * Will also reset internal tracking states.
 	 * @returns A map of client connections to messages.
 	 */
 	getMessages(): Map<ClientConnection, Message[]>;
+	/**
+	 * Gets all messages to be sent to clients.
+	 * Will also reset internal tracking states when callTick is true.
+	 * @param callTick Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+	 * @returns A map of client connections to messages.
+	 */
+	getMessages(callTick: boolean): Map<ClientConnection, Message[]>;
+	/**
+	 * Gets all messages to be sent to a single client.
+	 * Will also reset internal tracking states.
+	 * @param client The client connection to get messages for.
+	 * @returns The messages for the specified client.
+	 */
+	getMessages(client: ClientConnection): Message[];
+	/**
+	 * Gets all messages to be sent to a single client.
+	 * Will also reset internal tracking states when callTick is true.
+	 * @param client The client connection to get messages for.
+	 * @param callTick Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+	 * @returns The messages for the specified client.
+	 */
+	getMessages(client: ClientConnection, callTick: boolean): Message[];
+	/**
+	 * Gets all messages to be sent to multiple clients.
+	 * Will also reset internal tracking states.
+	 * @param clients The client connections to get messages for.
+	 * @returns A map of client connections to messages.
+	 */
+	getMessages(clients: Iterable<ClientConnection>): Map<ClientConnection, Message[]>;
+	/**
+	 * Gets all messages to be sent to multiple clients.
+	 * Will also reset internal tracking states when callTick is true.
+	 * @param clients The client connections to get messages for.
+	 * @param callTick Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+	 * @returns A map of client connections to messages.
+	 */
+	getMessages(clients: Iterable<ClientConnection>, callTick: boolean): Map<ClientConnection, Message[]>;
+	/**
+	 * Advances the internal state of the tracker, preparing it for the next synchronization cycle.
+	 */
+	tick(): void;
 	/**
 	 * Applies messages from a client connection.
 	 * @param messages The messages to apply.
@@ -685,6 +731,7 @@ export declare class ObjectSync {
 	 * @param resultsByClient A map of client connections to method invoke results.
 	 */
 	applyClientMethodInvokeResults(resultsByClient: Map<ClientConnection, MethodExecuteResult[]>): void;
+	applyClientMethodInvokeResultsFromClient(clientConnection: ClientConnection, results: MethodExecuteResult[]): void;
 	/**
 	 * Applies messages from multiple clients.
 	 * @param messagesByClient A map of client connections to messages.
@@ -767,7 +814,33 @@ export declare class ObjectSync {
 	 * @param constructor The constructor of the object type to find.
 	 * @returns An array of found objects.
 	 */
-	findObjectsOfType<T extends object>(constructor: Constructor<T>): number | T[];
+	findObjectsOfType<T extends object>(constructor: Constructor<T>): T[];
+	/**
+	 * Returns a proxy for the target object that routes method calls through the ObjectSync system.
+	 * Will also track the object if it is not already tracked as non root object.
+	 * This is a helper function to easily get a method call proxy for an object.
+	 * @param target The target object to create a method call proxy for.
+	 * @returns A proxy object that routes method calls.
+	 */
+	getInvokeProxy<T extends object>(target: T): SyncCallProxy<T>;
+	/**
+	 * Invokes a method on the target object through the ObjectSync system.
+	 * Will also track the object if it is not already tracked as non root object.
+	 * This is a helper function to easily invoke methods on tracked objects.
+	 * @param target The target object to invoke the method on.
+	 * @param method The method name to invoke.
+	 * @param args The arguments to pass to the method.
+	 * @returns The result of the method invocation.
+	 */
+	invoke<T extends object, K extends keyof T>(target: T, method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): SyncMethodInvokeResult<T, K>;
 }
+
+export {
+	nativeArraySerializer as nativeArray,
+	nativeMapSerializer as nativeMap,
+	nativeObjectSerializer as nativeObject,
+	nativeSetSerializer as nativeSet,
+	nativeTypeSerializers as nativeTypeGenerators,
+};
 
 export {};

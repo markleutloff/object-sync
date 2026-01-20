@@ -12,36 +12,35 @@ An `ObjectSync` instance will only create or instantiate types registered in its
 ## Key API Features
 
 - **Synchronize state between host and multiple clients:**
- 
+
   Register multiple clients with the host. State changes are propagated to all connected clients.
 
 - **Track changes to objects and properties:**
- 
+
   Use decorators to mark properties for tracking.
   Changes are automatically detected and can be synchronized to clients.
+  Only changes relevant for a client will be transmitted.
 
 - **Call methods on clients:**
-  
+
   Use decorators to methods for tracking.
   Those marked can be called from the host and the clients will execute them. Once execution is finished the host will know their results.
 
 - **Decorator-based API:**
-
   - `@syncObject`: Marks a class as trackable and synchronizable.
   - `@syncProperty`: Marks a property for change tracking and synchronization. Supports hooks for value manipulation and permission checks.
   - `@syncMethod`: Marks a method for remote invocation and synchronization. Supports hooks for argument manipulation and permission checks.
 
 - **Message-based communication:**
- 
+
   The library generates messages for state changes and method calls. You must implement the transport layer to send/receive these messages between host and clients.
 
 - **Array and observable array synchronization:**
-
   - `SyncableArray`: Synchronizes array values and mutations (push, splice, etc.) between host and client.
   - `SyncableObservableArray`: Extends `SyncableArray` with event support (`on`, `off`) for reacting to changes such as items being added or removed.
 
 - **TypeScript support:**
- 
+
   All API features are fully typed for safe and predictable usage in TypeScript projects.
 
 ## Installation
@@ -66,7 +65,7 @@ class SomeTrackableClass {
   // Allow remote invocation of this method from clients
   @syncMethod({
     promiseHandlingType: "await", // Await the result before responding
-    beforeExecuteOnClient({args, destinationClientConnection}) {
+    beforeExecuteOnClient({ args, destinationClientConnection }) {
       // Example: modify arguments before execution on client
       args[0] = args[0] + destinationClientConnection.identity;
 
@@ -177,6 +176,49 @@ const hostSync = new ObjectSync({
 });
 ```
 
+Some serializers are automatically provided, those are called nativeTypeSerializers in this library.
+
+This are the native serializers automatically provided:
+
+- Object
+  ```typescript
+  { foo: "bar", hello: "world", someTrackableValue: bla }
+  ```
+- Array - Beware: changes will be fully transmitted, use the provided SyncableArray class if you do not want this
+  ```typescript
+  ["hello", 123, false, true, someTrackableValue];
+  ```
+- Map
+  ```typescript
+  const myMap = new Map<string, any>();
+  myMap.add("first", 1234);
+  myMap.add("second", true);
+  myMap.add("third", someTrackableValue);
+  ```
+- Set
+  ```typescript
+  const mySet = new Set<any>();
+  myMap.set(1234);
+  myMap.set(true);
+  myMap.set(someTrackableValue);
+  ```
+
+All native serializers will look no further than the first level, so you cant put an object that contains a tracked value inside any of those.
+
+In the case that this is not what is wanted, one can provide a list of native serializers when creating any ObjectSync instance:
+
+```typescript
+import { ObjectSync, nativeObjectSerializer, nativeArraySerializer, nativeSetSerializer, nativeTypeSerializers } from "simple-object-sync";
+
+const hostSync = new ObjectSync({
+  ...
+  // specify it exactly
+  nativeTypeSerializers: [nativeObjectSerializer, nativeArraySerializer],
+  // or remove the unwanted ones
+  nativeTypeSerializers: nativeTypeSerializers.filter(serializer => serializer !== nativeSetSerializer),
+});
+```
+
 ### Control property/method sync behavior
 
 Use hooks like `beforeSendToClient`, `canApply`, and `beforeExecuteOnClient` for fine-grained control over what gets synchronized and when.
@@ -211,7 +253,7 @@ import { syncObject, nothing, syncProperty } from "simple-object-sync";
 @syncObject()
 class MyTrackableClass {
   @syncProperty({
-    beforeSendToClient({instance, key, value, destinationClientConnection}) {
+    beforeSendToClient({ instance, key, value, destinationClientConnection }) {
       // Prevent changes from beeing sent to the client
       return nothing;
 
@@ -221,7 +263,7 @@ class MyTrackableClass {
       // Or leave it as is:
       return value;
     },
-    canTrack({instance, key, info}) {
+    canTrack({ instance, key, info }) {
       const identity = info.host.identity; // Use this to retrive the identity of the ObjectSync object which wants to track this
 
       // Allow tracking:
@@ -230,7 +272,7 @@ class MyTrackableClass {
       // Or disallow it:
       return false;
     },
-    canApply({instance, key, sourceClientConnection}) {
+    canApply({ instance, key, sourceClientConnection }) {
       // Prevents the client from accepting the value
       return false;
 
@@ -276,12 +318,12 @@ class MyTrackableClass {
   // Allow remote invocation of this method from clients
   @syncMethod({
     // Report completion when finished and does not wait before finishing to sync message exchanges (This is the default)
-    promiseHandlingType: "normal", 
+    promiseHandlingType: "normal",
 
     // Await the result before finishing to sync message exchanges
-    promiseHandlingType: "await", 
+    promiseHandlingType: "await",
 
-    beforeExecuteOnClient({instance, key, args, destinationClientConnection}) {
+    beforeExecuteOnClient({ instance, key, args, destinationClientConnection }) {
       // Modify arguments before execution on client
       args[0] = args[0] + destinationClientConnection.identity;
 
@@ -292,10 +334,34 @@ class MyTrackableClass {
       return false;
     },
   })
-  invoke(someArgument: string) {
+  someMethod(someArgument: string) {
     return someArgument;
   }
 }
+```
+
+This is how to best execute a syncable method:
+
+```typescript
+const { clientResults, hostResult } = hostObjectSync.getMethodInvokeProxy(myHostObject).someMethod(someArgument);
+const hostResultValue = hostResult;
+
+await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+
+// clientResults must be awaited after we have exchanged messages
+// tthe reason for this: only after that, we now about any clients we may have
+const clientInvokeResults = await clientResults;
+
+// now we can get the result for a specific client
+// we await these too, because the time of resolve/reject may come after the previous message exchange
+// this is based upon the promiseHandlingType set in the syncMethod decorator
+const clientResult = await clientInvokeResults.get(someClientConnection);
+```
+
+Alternative way to invoke a method:
+
+```typescript
+const { clientResults, hostResult } = hostObjectSync.invoke(myHostObject, "someMethod", someArgument);
 ```
 
 See `tests/ts/objectSync.test.ts`, `tests/ts/syncableArray.test.ts`, `tests/ts/syncableObservableArray.test.ts`, and `tests/ts/multiClient.test.ts` for more advanced scenarios and real-world patterns.

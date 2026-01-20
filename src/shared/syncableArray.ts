@@ -5,7 +5,7 @@ import { ClientConnection } from "../tracker/tracker.js";
 import { ChangeTrackerObjectInfo } from "../tracker/trackerObjectInfo.js";
 import { ITrackedOnConvertedToTrackable, ITrackedOnTick, onConvertedToTrackable, onTick } from "../tracker/interfaces.js";
 import { isPropertyInfoSymbol, PropertyInfo } from "./messages.js";
-import { getHostObjectInfo } from "./objectSyncMetaInfo.js";
+import { getTrackerObjectInfo } from "./objectSyncMetaInfo.js";
 
 export type SyncableArrayChange<T> = { start: number; deleteCount: number; items: PropertyInfo<any, any>[] };
 
@@ -48,7 +48,7 @@ export class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrack
     this.onRemoved(index, [value]);
     this.onAdded(index, [value]);
 
-    const hostObjectInfo = getHostObjectInfo(this);
+    const hostObjectInfo = getTrackerObjectInfo(this);
     if (hostObjectInfo) {
       this._creation[index] = this.convertItemToPropertyInfo(hostObjectInfo, value);
       this.addChange({ start: index, deleteCount: 1, items: this.convertItemsToPropertyInfos(hostObjectInfo, [value]) });
@@ -73,7 +73,7 @@ export class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrack
     const startIndex = this._values.length;
     this._values.push(...items);
 
-    const hostObjectInfo = getHostObjectInfo(this);
+    const hostObjectInfo = getTrackerObjectInfo(this);
     if (hostObjectInfo) {
       this._creation.push(...this.convertItemsToPropertyInfos(hostObjectInfo, items));
       this.addChange({ start: startIndex, deleteCount: 0, items: this.convertItemsToPropertyInfos(hostObjectInfo, items) });
@@ -95,7 +95,7 @@ export class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrack
     if (removedItems.length > 0) this.onRemoved(start, removedItems);
     if (items.length > 0) this.onAdded(start, items);
 
-    const hostObjectInfo = getHostObjectInfo(this);
+    const hostObjectInfo = getTrackerObjectInfo(this);
     if (hostObjectInfo) {
       const convertedItems = this.convertItemsToPropertyInfos(hostObjectInfo, items);
       this._creation.splice(start, deleteCount, ...convertedItems);
@@ -192,7 +192,7 @@ export class SyncableArray<T> implements ITrackableOnUpdateProperty<any>, ITrack
   }
 
   private onPropertyChanged(property: string, value: any) {
-    const host = getHostObjectInfo(this);
+    const host = getTrackerObjectInfo(this);
     if (!host) return;
 
     host.onPropertyChanged(property as any, value);

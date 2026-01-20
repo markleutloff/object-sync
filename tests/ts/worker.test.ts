@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import { ClientConnection, getHostObjectInfo, Message, MethodExecuteResult, ObjectSync, syncMethod, syncObject, syncProperty } from "../../src";
+import { ClientConnection, getTrackerObjectInfo, Message, MethodExecuteResult, ObjectSync, syncMethod, syncObject, syncProperty } from "../../src";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "assert";
 
@@ -21,7 +21,7 @@ class Root {
 
   @syncMethod({
     promiseHandlingType: "await",
-    beforeExecuteOnClient({instance, key, args, destinationClientConnection}) {
+    beforeExecuteOnClient({ instance, key, args, destinationClientConnection }) {
       args[0] = args[0] + destinationClientConnection.identity;
       return true;
     },
@@ -109,7 +109,7 @@ describe("ObjectSync with worker threads", () => {
 
   it("should report creation to clients", async () => {
     const prefixToSend = "response from client: ";
-    const results = getHostObjectInfo(hostRoot)!.invoke("invoke", prefixToSend);
+    const results = hostObjectSync.invoke(hostRoot, "invoke", prefixToSend);
     await exchangeMessagesAsync(hostObjectSync, workers);
 
     const clientResults = await results.clientResults;

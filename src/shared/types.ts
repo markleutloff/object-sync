@@ -1,9 +1,13 @@
 // Type which has only T or any iterable of T
 export type OneOrMany<T> = T | Iterable<T>;
 
+export function isIterable<T>(input: OneOrMany<T>): input is Iterable<T> {
+  return input && Symbol.iterator in Object(input) && typeof input !== "string";
+}
+
 // function which converts OneOrMany<T> to an iterable of T
 export function toIterable<T>(input: OneOrMany<T>, preferSet = false): Iterable<T> {
-  if (Symbol.iterator in Object(input) && typeof input !== "string") {
+  if (isIterable(input)) {
     return input as Iterable<T>;
   }
   return (preferSet ? new Set([input]) : [input]) as Iterable<T>;

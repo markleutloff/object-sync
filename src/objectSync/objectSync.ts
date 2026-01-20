@@ -2,9 +2,11 @@ import { type ClientConnection, type ClientConnectionSettings, ObjectChangeTrack
 import { allTypeGenerators, ObjectChangeApplicator, type TypeGenerator, type TypeSerializer } from "../applicator/applicator.js";
 import type { Message, MethodExecuteResult } from "../shared/messages.js";
 import { TrackedObjectPool } from "../shared/trackedObjectPool.js";
-import type { Constructor } from "../shared/types.js";
+import { isIterable, mapIterable, type Constructor, type OneOrMany } from "../shared/types.js";
 import { getTrackableTypeInfo } from "../tracker/decorators.js";
-import type { ClientFilter } from "../index.js";
+import { getTrackerObjectInfo, MethodCallResult, type ClientFilter } from "../index.js";
+import { SyncCallProxy, SyncMethodInvokeResult } from "../tracker/trackerObjectInfo.js";
+import { nativeTypeSerializers, NativeTypeSerializer } from "../shared/nativeTypeGenerators.js";
 
 export type ObjectSyncSettings = {
   /**
@@ -26,6 +28,13 @@ export type ObjectSyncSettings = {
    * Can be provided as a Map of type IDs to serializers or as an array of serializers.
    */
   typeSerializers?: Map<string, TypeSerializer<any>> | TypeSerializer<any>[];
+
+  /**
+   * Native type serializers to use for serializing and deserializing native types during synchronization.
+   * Can be provided as an array of native type serializers.
+   * When not provided, default native type serializers will be used.
+   */
+  nativeTypeSerializers?: NativeTypeSerializer[];
 };
 
 type FinalObjectSyncSettings = {
@@ -33,6 +42,7 @@ type FinalObjectSyncSettings = {
   identity: string;
   typeGenerators: Map<string, TypeGenerator>;
   typeSerializers: Map<string, TypeSerializer<any>>;
+  nativeTypeSerializers: NativeTypeSerializer[];
 };
 
 /**
@@ -42,6 +52,7 @@ export class ObjectSync {
   private readonly _tracker: ObjectChangeTracker;
   private readonly _applicator: ObjectChangeApplicator;
   private readonly _settings: FinalObjectSyncSettings;
+  private readonly _objectPool: TrackedObjectPool;
 
   constructor(settings: ObjectSyncSettings) {
     this._settings = {
@@ -49,6 +60,7 @@ export class ObjectSync {
       objectIdPrefix: settings.objectIdPrefix ?? `${settings.identity}-${Date.now()}-`,
       typeGenerators: new Map<string, TypeGenerator>(),
       typeSerializers: new Map<string, TypeSerializer<any>>(),
+      nativeTypeSerializers: settings.nativeTypeSerializers ?? nativeTypeSerializers,
     };
 
     if (Array.isArray(settings.typeGenerators)) {
@@ -65,32 +77,89 @@ export class ObjectSync {
       }
     } else if (settings.typeSerializers) this._settings.typeSerializers = settings.typeSerializers;
 
-    const objectPool = new TrackedObjectPool();
+    this._objectPool = new TrackedObjectPool();
 
     this._tracker = new ObjectChangeTracker({
-      objectPool,
+      objectPool: this._objectPool,
       ...this._settings,
     });
     this._applicator = new ObjectChangeApplicator({
-      objectPool,
+      objectPool: this._objectPool,
       ...this._settings,
     });
   }
 
-  // get tracker(): ObjectChangeTracker {
-  //   return this._tracker;
-  // }
-
-  // get applicator(): ObjectChangeApplicator {
-  //   return this._applicator;
-  // }
-
   /**
-   * Gets all messages to be sent to clients. Will also reset internal tracking states.
+   * Gets all messages to be sent to clients.
+   * Will also reset internal tracking states.
    * @returns A map of client connections to messages.
    */
-  getMessages(): Map<ClientConnection, Message[]> {
-    return this._tracker.getMessages();
+  getMessages(): Map<ClientConnection, Message[]>;
+
+  /**
+   * Gets all messages to be sent to clients.
+   * Will also reset internal tracking states when callTick is true.
+   * @param callTick Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+   * @returns A map of client connections to messages.
+   */
+  getMessages(callTick: boolean): Map<ClientConnection, Message[]>;
+
+  /**
+   * Gets all messages to be sent to a single client.
+   * Will also reset internal tracking states.
+   * @param client The client connection to get messages for.
+   * @returns The messages for the specified client.
+   */
+  getMessages(client: ClientConnection): Message[];
+
+  /**
+   * Gets all messages to be sent to a single client.
+   * Will also reset internal tracking states when callTick is true.
+   * @param client The client connection to get messages for.
+   * @param callTick Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+   * @returns The messages for the specified client.
+   */
+  getMessages(client: ClientConnection, callTick: boolean): Message[];
+
+  /**
+   * Gets all messages to be sent to multiple clients.
+   * Will also reset internal tracking states.
+   * @param clients The client connections to get messages for.
+   * @returns A map of client connections to messages.
+   */
+  getMessages(clients: Iterable<ClientConnection>): Map<ClientConnection, Message[]>;
+
+  /**
+   * Gets all messages to be sent to multiple clients.
+   * Will also reset internal tracking states when callTick is true.
+   * @param clients The client connections to get messages for.
+   * @param callTick Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+   * @returns A map of client connections to messages.
+   */
+  getMessages(clients: Iterable<ClientConnection>, callTick: boolean): Map<ClientConnection, Message[]>;
+
+  getMessages(clientOrClientsOrCallTick?: boolean | OneOrMany<ClientConnection>, callTick: boolean = true): Map<ClientConnection, Message[]> | Message[] {
+    let result: Map<ClientConnection, Message[]>;
+    let clients: OneOrMany<ClientConnection> | undefined;
+    if (typeof clientOrClientsOrCallTick === "boolean" || clientOrClientsOrCallTick === undefined) {
+      clients = undefined;
+      callTick = clientOrClientsOrCallTick ?? true;
+    } else if (!isIterable(clientOrClientsOrCallTick)) {
+      clients = clientOrClientsOrCallTick;
+    }
+
+    result = this._tracker.getMessages(clients);
+    if (callTick) this._tracker.tick();
+
+    if (clients === undefined || isIterable(clients)) return result;
+    return result.get(clients)!;
+  }
+
+  /**
+   * Advances the internal state of the tracker, preparing it for the next synchronization cycle.
+   */
+  tick(): void {
+    this._tracker.tick();
   }
 
   /**
@@ -109,8 +178,12 @@ export class ObjectSync {
    */
   applyClientMethodInvokeResults(resultsByClient: Map<ClientConnection, MethodExecuteResult[]>): void {
     for (const [clientToken, results] of resultsByClient) {
-      this._tracker.applyClientMethodInvokeResults(clientToken, results);
+      this.applyClientMethodInvokeResultsFromClient(clientToken, results);
     }
+  }
+
+  applyClientMethodInvokeResultsFromClient(clientConnection: ClientConnection, results: MethodExecuteResult[]): void {
+    this._tracker.applyClientMethodInvokeResults(clientConnection, results);
   }
 
   /**
@@ -150,7 +223,7 @@ export class ObjectSync {
    */
   async exchangeMessagesAsync(
     sendToClientAsync: (client: ClientConnection, messages: Message[]) => Promise<MethodExecuteResult[]>,
-    errorHandler?: (client: ClientConnection, error: any) => void
+    errorHandler?: (client: ClientConnection, error: any) => void,
   ): Promise<void> {
     const messages = this.getMessages();
     const resultsByClient = new Map<ClientConnection, Promise<MethodExecuteResult[]>>();
@@ -183,7 +256,7 @@ export class ObjectSync {
    */
   async exchangeMessagesBulkAsync(
     sendToClientsAsync: (messagesByClient: Map<ClientConnection, Message[]>) => Promise<Map<ClientConnection, MethodExecuteResult[]>>,
-    errorHandler?: (client: ClientConnection, error: any) => void
+    errorHandler?: (client: ClientConnection, error: any) => void,
   ): Promise<void> {
     const messages = this.getMessages();
     const resultsByClient = await sendToClientsAsync(messages);
@@ -287,5 +360,47 @@ export class ObjectSync {
    */
   findObjectsOfType<T extends object>(constructor: Constructor<T>) {
     return this._applicator.findObjectsOfType(constructor);
+  }
+
+  /**
+   * Returns a proxy for the target object that routes method calls through the ObjectSync system.
+   * Will also track the object if it is not already tracked as non root object.
+   * This is a helper function to easily get a method call proxy for an object.
+   * @param target The target object to create a method call proxy for.
+   * @returns A proxy object that routes method calls.
+   */
+  getInvokeProxy<T extends object>(target: T): SyncCallProxy<T> {
+    if (!this._objectPool.has(target)) {
+      this._tracker.track(target, { isRoot: false });
+    }
+
+    const meta = getTrackerObjectInfo(target);
+    if (!meta) {
+      throw new Error("Target object is not tracked and cannot be proxied.");
+    }
+
+    return meta.invokeProxy;
+  }
+
+  /**
+   * Invokes a method on the target object through the ObjectSync system.
+   * Will also track the object if it is not already tracked as non root object.
+   * This is a helper function to easily invoke methods on tracked objects.
+   * @param target The target object to invoke the method on.
+   * @param method The method name to invoke.
+   * @param args The arguments to pass to the method.
+   * @returns The result of the method invocation.
+   */
+  invoke<T extends object, K extends keyof T>(target: T, method: K, ...args: T[K] extends (...a: infer P) => any ? P : never): SyncMethodInvokeResult<T, K> {
+    if (!this._objectPool.has(target)) {
+      this._tracker.track(target, { isRoot: false });
+    }
+
+    const meta = getTrackerObjectInfo(target);
+    if (!meta) {
+      throw new Error("Target object is not tracked and cannot be proxied.");
+    }
+
+    return meta.invoke(method, ...args);
   }
 }
