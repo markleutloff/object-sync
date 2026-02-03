@@ -14,5 +14,5 @@
     "target": "ES2022" // or higher
   },
   "exclude": ["../../node_modules/**"],
-  "files": ["worker.ts"]
+  "files": ["worker/workerCode.ts"]
 }

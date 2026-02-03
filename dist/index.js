@@ -5,919 +5,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
 // build/shared/decorators.js
 Symbol.metadata ?? (Symbol.metadata = Symbol("metadata"));
 
-// build/shared/messages.js
-var isPropertyInfoSymbol = Symbol("isPropertyInfo");
-function isPropertyInfo(value) {
-  return isPropertyInfoSymbol in value;
-}
-
-// build/applicator/trackableTarget.js
-var onCreated = Symbol("onCreated");
-var onUpdated = Symbol("onUpdated");
-var onUpdateProperty = Symbol("onUpdateProperty");
-var onDelete = Symbol("onDelete");
-var onDeleted = Symbol("onDeleted");
-function hasOnCreated(obj) {
-  return onCreated in obj;
-}
-function hasOnDeleted(obj) {
-  return onDeleted in obj;
-}
-function hasOnDelete(obj) {
-  return onDelete in obj;
-}
-function hasOnUpdated(obj) {
-  return onUpdated in obj;
-}
-function hasOnUpdateProperty(obj) {
-  return onUpdateProperty in obj;
-}
-function invokeOnCreated(obj, changes, client, clientConnection) {
-  if (hasOnCreated(obj)) {
-    obj[onCreated](changes, client, clientConnection);
-  }
-}
-function invokeOnUpdated(obj, changes, client, clientConnection) {
-  if (hasOnUpdated(obj)) {
-    obj[onUpdated](changes, client, clientConnection);
-  }
-}
-function invokeOnDeleted(obj, client, clientConnection) {
-  if (hasOnDeleted(obj)) {
-    obj[onDeleted](client, clientConnection);
-  }
-}
-function invokeOnDelete(obj, client, clientConnection) {
-  if (hasOnDelete(obj)) {
-    obj[onDelete](client, clientConnection);
-  }
-  return true;
-}
-function invokeOnUpdateProperty(obj, key, value, isForCreate, client, clientConnection) {
-  if (hasOnUpdateProperty(obj)) {
-    return obj[onUpdateProperty](key, value, isForCreate, client, clientConnection);
-  }
-  return false;
-}
-
-// build/shared/objectInfoBase.js
-var ObjectInfoBase = class {
-  constructor(_objectSyncMetaInfo) {
-    __publicField(this, "_objectSyncMetaInfo");
-    this._objectSyncMetaInfo = _objectSyncMetaInfo;
-  }
-  get objectId() {
-    return this._objectSyncMetaInfo.objectId;
-  }
-  get typeId() {
-    return this._objectSyncMetaInfo.typeId;
-  }
-  get object() {
-    return this._objectSyncMetaInfo.object;
-  }
-  get objectSyncMetaInfo() {
-    return this._objectSyncMetaInfo;
-  }
-};
-
-// build/applicator/applicatorObjectInfo.js
-var ApplicatorObjectInfo = class extends ObjectInfoBase {
-  constructor(objectSyncMetaInfo, _applicator) {
-    super(objectSyncMetaInfo);
-    __publicField(this, "_applicator");
-    this._applicator = _applicator;
-  }
-  get applicator() {
-    return this._applicator;
-  }
-};
-
-// build/applicator/applicator.js
-var allTypeGenerators = /* @__PURE__ */ new Map();
-function isGeneratorConstructor(value) {
-  return value.prototype !== void 0;
-}
-function isGeneratorTargetGenerator(value) {
-  return true;
-}
-var ObjectChangeApplicator = class {
-  constructor(settings) {
-    __publicField(this, "_trackedObjectPool");
-    __publicField(this, "_pendingCreationMessages", /* @__PURE__ */ new Map());
-    __publicField(this, "_currentClientApplyResult", { newTrackedObjects: [], methodExecuteResults: [] });
-    __publicField(this, "_settings");
-    __publicField(this, "_typeGenerators");
-    __publicField(this, "_typeSerializers");
-    __publicField(this, "_nativeTypeSerializers");
-    this._settings = {
-      identity: settings.identity
-    };
-    this._trackedObjectPool = settings.objectPool;
-    this._typeSerializers = settings.typeSerializers;
-    this._nativeTypeSerializers = settings.nativeTypeSerializers;
-    this._typeGenerators = settings.typeGenerators;
-  }
-  get settings() {
-    return this._settings;
-  }
-  get identity() {
-    return this._settings.identity;
-  }
-  registerGenerator(typeId, generator) {
-    if (this._typeGenerators.has(typeId)) {
-      throw new Error(`Generator for typeId ${typeId} is already registered`);
-    }
-    this._typeGenerators.set(typeId, generator);
-  }
-  async applyAsync(messages, clientConnection) {
-    messages.sort((a, b) => {
-      if (a.type === b.type)
-        return 0;
-      if (a.type === "create")
-        return -1;
-      if (b.type === "create")
-        return 1;
-      if (a.type === "change")
-        return -1;
-      if (b.type === "change")
-        return 1;
-      if (a.type === "execute")
-        return -1;
-      if (b.type === "execute")
-        return 1;
-      if (a.type === "delete")
-        return 1;
-      if (b.type === "delete")
-        return -1;
-      return 0;
-    });
-    const creationMessages = messages.filter(isCreateObjectMessage);
-    messages = messages.filter((m) => !isCreateObjectMessage(m));
-    for (const creationMessage of creationMessages) {
-      this._pendingCreationMessages.set(creationMessage.objectId, creationMessage);
-    }
-    while (this._pendingCreationMessages.size > 0) {
-      const creationMessage = this._pendingCreationMessages.values().next().value;
-      this.createNewTrackedObject(creationMessage, clientConnection);
-    }
-    for (const message of messages) {
-      if (isChangeObjectMessage(message))
-        this.handleChanges(message, clientConnection);
-      else if (isDeleteObjectMessage(message))
-        this.deleteTrackedObject(message, clientConnection);
-      else if (isExecuteObjectMessage(message))
-        await this.executeMethodAsync(message, clientConnection);
-    }
-    const result = this._currentClientApplyResult;
-    this._currentClientApplyResult = { newTrackedObjects: [], methodExecuteResults: [] };
-    return result;
-  }
-  getPropertyValue(property, clientConnection) {
-    const { objectId, value, typeId } = property;
-    if (typeId) {
-      return this.deserializeValue(typeId, value, clientConnection);
-    }
-    if (objectId !== void 0 && objectId !== null) {
-      let tracked = this._trackedObjectPool.get(objectId);
-      if (!tracked) {
-        const pendingMsg = this._pendingCreationMessages.get(objectId);
-        if (pendingMsg) {
-          this.createNewTrackedObject(pendingMsg, clientConnection);
-          tracked = this._trackedObjectPool.get(objectId);
-        }
-      }
-      if (!tracked) {
-        throw new Error(`Cannot find or create target with id ${objectId}`);
-      }
-      return tracked;
-    }
-    return value;
-  }
-  findObjectOfType(constructor, objectId) {
-    for (const tracked of this._trackedObjectPool.all) {
-      if (tracked instanceof constructor) {
-        const metaInfo = getObjectSyncMetaInfo(tracked);
-        if (objectId !== void 0 && metaInfo.objectId !== objectId)
-          continue;
-        return tracked;
-      }
-    }
-    return null;
-  }
-  findObjectsOfType(constructor) {
-    const results = [];
-    for (const tracked of this._trackedObjectPool.all) {
-      if (tracked instanceof constructor) {
-        results.push(tracked);
-      }
-    }
-    return results;
-  }
-  get allTrackedObjects() {
-    return Array.from(this._trackedObjectPool.all);
-  }
-  deleteTrackedObject(data, clientConnection) {
-    if (!isDeleteObjectMessage(data))
-      return;
-    if (!this._trackedObjectPool.hasById(data.objectId)) {
-      throw new Error(`Object with id ${data.objectId} is not being tracked`);
-    }
-    const tracked = this._trackedObjectPool.get(data.objectId);
-    if (!invokeOnDelete(tracked, this, clientConnection))
-      return;
-    this._trackedObjectPool.deleteById(data.objectId);
-    invokeOnDeleted(tracked, this, clientConnection);
-  }
-  constructObject(data, clientConnection) {
-    if (this._trackedObjectPool.hasById(data.objectId)) {
-      return;
-    }
-    let result = null;
-    const generatorOrConstructor = this._typeGenerators.get(data.typeId);
-    if (!generatorOrConstructor) {
-      throw new Error(`No constructor or generator registered for typeId ${data.typeId}`);
-    }
-    if (isGeneratorConstructor(generatorOrConstructor)) {
-      result = new generatorOrConstructor();
-    } else if (isGeneratorTargetGenerator(generatorOrConstructor)) {
-      const resolvablePropertyInfos = this.createResolvablePropertyInfos(data.properties, clientConnection);
-      result = generatorOrConstructor(this, resolvablePropertyInfos, data.objectId, data.typeId);
-      resolvablePropertyInfos.deletedProperties.forEach((key) => {
-        delete result[key];
-      });
-    }
-    if (!result)
-      return;
-    const objectInfo = ensureObjectSyncMetaInfo({
-      object: result,
-      objectId: data.objectId,
-      typeId: data.typeId
-    });
-    objectInfo.applicatorInfo = new ApplicatorObjectInfo(objectInfo, this);
-    if (!this._trackedObjectPool.has(result)) {
-      this._trackedObjectPool.add(result);
-      this._currentClientApplyResult.newTrackedObjects.push(result);
-    }
-    return;
-  }
-  createResolvablePropertyInfos(unresolvedProperties, clientConnection) {
-    const deletedProperties = /* @__PURE__ */ new Set();
-    const properties = {
-      deleteProperty(key) {
-        deletedProperties.add(key);
-      },
-      get deletedProperties() {
-        return Array.from(deletedProperties);
-      }
-    };
-    Object.keys(unresolvedProperties).forEach((key) => {
-      const propertyInfo = unresolvedProperties[key];
-      let resolvedValue = void 0;
-      let hasResolved = false;
-      Object.defineProperty(properties, key, {
-        get: () => {
-          if (!hasResolved) {
-            hasResolved = true;
-            resolvedValue = this.getPropertyValue(propertyInfo, clientConnection);
-          }
-          return resolvedValue;
-        }
-      });
-    });
-    return properties;
-  }
-  createNewTrackedObject(data, clientConnection) {
-    if (!isCreateObjectMessage(data))
-      return;
-    this._pendingCreationMessages.delete(data.objectId);
-    this.constructObject(data, clientConnection);
-    this.handleChanges(data, clientConnection);
-  }
-  handleChanges(data, clientConnection) {
-    const isCreate = isCreateObjectMessage(data);
-    const isChange = isChangeObjectMessage(data);
-    if (!isCreate && !isChange)
-      return;
-    const tracked = this._trackedObjectPool.get(data.objectId);
-    if (!tracked) {
-      throw new Error(`Cannot find target with id ${data.objectId}`);
-    }
-    Object.keys(data.properties).forEach((key) => {
-      if (!checkCanApplyProperty(tracked.constructor, tracked, key, false, clientConnection))
-        return;
-      const property = data.properties[key];
-      const finalValue = this.getPropertyValue(property, clientConnection);
-      const propertyInfo = getSyncPropertyInfo(tracked.constructor, key);
-      if (propertyInfo)
-        propertyInfo.isBeeingApplied = true;
-      try {
-        if (!invokeOnUpdateProperty(tracked, key, finalValue, isCreate, this, clientConnection))
-          tracked[key] = finalValue;
-      } finally {
-        if (propertyInfo)
-          propertyInfo.isBeeingApplied = false;
-      }
-    });
-    if (isChange)
-      invokeOnUpdated(tracked, data, this, clientConnection);
-    else if (isCreate)
-      invokeOnCreated(tracked, data, this, clientConnection);
-  }
-  async executeMethodAsync(data, clientConnection) {
-    if (!isExecuteObjectMessage(data))
-      return;
-    const tracked = this._trackedObjectPool.get(data.objectId);
-    if (!tracked) {
-      throw new Error(`Cannot find target with id ${data.objectId}`);
-    }
-    if (!checkCanApplyProperty(tracked.constructor, tracked, data.method, true, clientConnection)) {
-      this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "rejected", error: "Not allowed." });
-      return;
-    }
-    if (typeof tracked[data.method] !== "function") {
-      throw new Error(`Target with id ${data.objectId} has no method ${data.method}`);
-    }
-    const methodInfo = getSyncMethodInfo(tracked.constructor, data.method);
-    const args = data.parameters.map((property) => this.getPropertyValue(property, clientConnection));
-    let result;
-    try {
-      if (methodInfo)
-        methodInfo.isBeeingApplied = true;
-      result = tracked[data.method](...args);
-    } catch (e) {
-      this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "rejected", error: e });
-      return;
-    } finally {
-      if (methodInfo)
-        methodInfo.isBeeingApplied = false;
-    }
-    if (result && typeof result.then === "function" && typeof result.catch === "function") {
-      const promiseHandlingType = getSyncMethodInfo(tracked.constructor, data.method)?.promiseHandlingType ?? "normal";
-      const resolveNow = promiseHandlingType === "await";
-      if (resolveNow) {
-        try {
-          const resolved = await result;
-          this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: resolved, status: "resolved", error: null });
-        } catch (error) {
-          this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "rejected", error });
-        }
-      } else {
-        result.then((resolved) => {
-          this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: resolved, status: "resolved", error: null });
-        }).catch((error) => {
-          this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result: null, status: "rejected", error });
-        });
-      }
-    } else {
-      this._currentClientApplyResult.methodExecuteResults.push({ objectId: data.objectId, id: data.id, result, status: "resolved", error: null });
-    }
-  }
-  deserializeValue(typeId, value, clientConnection) {
-    const generator = this._typeSerializers.get(typeId) ?? this._nativeTypeSerializers.find((g) => g.typeId === typeId);
-    if (!generator) {
-      throw new Error(`No deserializer registered for typeId ${typeId}`);
-    }
-    if (generator.deserialize)
-      return generator.deserialize(value, this, clientConnection);
-    else
-      return new generator.type(value);
-  }
-};
-function isDeleteObjectMessage(change) {
-  return change.type === "delete";
-}
-function isCreateObjectMessage(change) {
-  return change.type === "create";
-}
-function isChangeObjectMessage(change) {
-  return change.type === "change";
-}
-function isExecuteObjectMessage(change) {
-  return change.type === "execute";
-}
-
-// build/tracker/decorators.js
-var TRACKABLE_CONSTRUCTOR_INFO = Symbol("trackableConstructor");
-var nothing = Symbol("nothing");
-function syncProperty(settings) {
-  settings ?? (settings = {});
-  return function syncProperty2(target, context) {
-    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
-    const propertyInfo = {
-      ...settings,
-      isBeeingApplied: false
-    };
-    const propertyName = context.name;
-    trackableInfo.trackedProperties.set(propertyName, propertyInfo);
-    const result = {
-      set(value) {
-        const isBeeingApplied = propertyInfo.isBeeingApplied;
-        propertyInfo.isBeeingApplied = false;
-        target.set.call(this, value);
-        if (isBeeingApplied || propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly")
-          return;
-        const host = getObjectSyncMetaInfo(this)?.trackerInfo;
-        if (host && checkCanTrackPropertyInfo(propertyInfo, this, propertyName, host)) {
-          host.onPropertyChanged(context.name, value);
-        }
-      }
-    };
-    return result;
-  };
-}
-function syncMethod(settings) {
-  settings ?? (settings = {});
-  return function syncMethod2(target, context) {
-    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
-    const methodInfo = {
-      ...settings,
-      isBeeingApplied: false
-    };
-    const methodName = context.name;
-    trackableInfo.trackedMethods.set(methodName, methodInfo);
-    const originalMethod = target;
-    const func = function(...args) {
-      const isBeeingApplied = methodInfo.isBeeingApplied;
-      methodInfo.isBeeingApplied = false;
-      const result = originalMethod.apply(this, args);
-      if (isBeeingApplied || methodInfo.mode === "none" || methodInfo.mode === "applyOnly")
-        return result;
-      const hostInfo = getObjectSyncMetaInfo(this)?.trackerInfo;
-      if (hostInfo && checkCanTrackPropertyInfo(methodInfo, this, methodName, hostInfo)) {
-        hostInfo.onMethodExecute(context.name, args);
-      }
-      return result;
-    };
-    return func;
-  };
-}
-function getTrackableTypeInfo(ctor) {
-  const trackableInfo = ctor[Symbol.metadata]?.[TRACKABLE_CONSTRUCTOR_INFO];
-  return trackableInfo ?? null;
-}
-function syncObject(settings) {
-  return function syncObject2(target, context) {
-    settings ?? (settings = {});
-    settings.typeId ?? (settings.typeId = context.name);
-    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
-    trackableInfo.typeId = settings.typeId;
-    trackableInfo.beforeSendToClient = settings.beforeSendToClient;
-    if (settings.properties) {
-      for (const [propertyKey, propertySettings] of Object.entries(settings.properties)) {
-        trackableInfo.trackedProperties.set(propertyKey, {
-          ...propertySettings,
-          isBeeingApplied: false
-        });
-      }
-    }
-    if (settings.methods) {
-      for (const [methodKey, methodSettings] of Object.entries(settings.methods)) {
-        trackableInfo.trackedMethods.set(methodKey, {
-          ...methodSettings,
-          isBeeingApplied: false
-        });
-      }
-    }
-    allTypeGenerators.set(settings.typeId, settings.generator ?? target);
-  };
-}
-function ensureTrackableConstructorInfo(metadata) {
-  const oldTrackableInfo = metadata[TRACKABLE_CONSTRUCTOR_INFO] ?? {
-    trackedProperties: /* @__PURE__ */ new Map(),
-    trackedMethods: /* @__PURE__ */ new Map(),
-    isAutoTrackable: false,
-    beforeSendToClient: void 0
-  };
-  const newTrackableInfo = {
-    trackedProperties: new Map(oldTrackableInfo.trackedProperties),
-    trackedMethods: new Map(oldTrackableInfo.trackedMethods),
-    typeId: oldTrackableInfo.typeId,
-    beforeSendToClient: oldTrackableInfo.beforeSendToClient
-  };
-  metadata[TRACKABLE_CONSTRUCTOR_INFO] = newTrackableInfo;
-  return newTrackableInfo;
-}
-function getSyncPropertyInfo(constructor, propertyKey) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return null;
-  }
-  const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
-  return propertyInfo ?? null;
-}
-function getSyncMethodInfo(constructor, propertyKey) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return null;
-  }
-  const propertyInfo = constructorInfo.trackedMethods.get(propertyKey);
-  return propertyInfo ?? null;
-}
-function checkCanApplyProperty(constructor, instance, propertyKey, isMethod, sourceClientConnection) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo)
-    return false;
-  const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
-  if (!propertyInfo)
-    return false;
-  if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly")
-    return;
-  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientConnection }) === false)
-    return false;
-  return true;
-}
-function checkCanTrackPropertyInfo(propertyInfo, instance, propertyKey, info) {
-  if (!propertyInfo) {
-    return false;
-  }
-  if (propertyInfo.canTrack?.call(instance, { instance, key: propertyKey, info }) === false) {
-    return false;
-  }
-  return true;
-}
-function beforeExecuteOnClient(constructor, instance, methodKey, args, destinationClientConnection) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return false;
-  }
-  const methodInfo = constructorInfo.trackedMethods.get(methodKey);
-  if (!methodInfo) {
-    return false;
-  }
-  if (methodInfo.beforeExecuteOnClient?.call(instance, { instance, key: methodKey, args, destinationClientConnection }) === false) {
-    return false;
-  }
-  return true;
-}
-function beforeSendPropertyToClient(constructor, instance, propertyKey, value, destinationClientConnection) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return nothing;
-  }
-  const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
-  if (!propertyInfo) {
-    return nothing;
-  }
-  if (!propertyInfo.beforeSendToClient) {
-    return value;
-  }
-  return propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientConnection });
-}
-function beforeSendObjectToClient(constructor, instance, typeId, destinationClientConnection) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return nothing;
-  }
-  if (!constructorInfo.beforeSendToClient) {
-    return typeId;
-  }
-  const result = constructorInfo.beforeSendToClient.call(instance, { instance, constructor, typeId, destinationClientConnection });
-  if (result === null || result === void 0 || result === nothing) {
-    return nothing;
-  }
-  if (typeof result === "string") {
-    return result;
-  }
-  if (typeof result === "function") {
-    const newConstructorInfo = getTrackableTypeInfo(result);
-    if (newConstructorInfo && newConstructorInfo.typeId) {
-      return newConstructorInfo.typeId;
-    }
-    throw new Error(`The constructor returned from beforeSendToClient does not have a typeId.`);
-  }
-  return typeId;
-}
-
-// build/shared/objectSyncMetaInfo.js
-var objectSyncSymbol = Symbol("objectSync");
-function getObjectSyncMetaInfo(target) {
-  if (!target || typeof target !== "object")
-    return void 0;
-  if (typeof target === "function")
-    return void 0;
-  return target[objectSyncSymbol];
-}
-var nextObjectId = 1;
-function createObjectId(objectIdPrefix) {
-  return `${objectIdPrefix}${nextObjectId++}`;
-}
-function ensureObjectSyncMetaInfo(settings) {
-  let metaInfo = getObjectSyncMetaInfo(settings.object);
-  if (metaInfo)
-    return metaInfo;
-  if (!("objectId" in settings) && !("objectIdPrefix" in settings)) {
-    throw new Error("objectIdPrefix must be provided when objectId is provided");
-  }
-  const typeId = settings.typeId ?? getTrackableTypeInfo(settings.object.constructor)?.typeId ?? settings.object.constructor.name;
-  const objectId = settings.objectId ?? createObjectId(settings.objectIdPrefix);
-  metaInfo = {
-    objectId,
-    typeId,
-    object: settings.object
-  };
-  settings.object[objectSyncSymbol] = metaInfo;
-  return metaInfo;
-}
-function getTrackerObjectInfo(obj) {
-  return getObjectSyncMetaInfo(obj)?.trackerInfo ?? null;
-}
-function getApplicatorObjectInfo(obj) {
-  return getObjectSyncMetaInfo(obj)?.applicatorInfo ?? null;
-}
-
-// build/shared/trackedObjectPool.js
-var TrackedObjectPool = class {
-  constructor() {
-    __publicField(this, "_trackedObjectInfos", /* @__PURE__ */ new Map());
-  }
-  add(object) {
-    const metaInfo = getObjectSyncMetaInfo(object);
-    if (!metaInfo)
-      throw new Error("Object is not trackable.");
-    if (this.hasById(metaInfo?.objectId))
-      return;
-    this._trackedObjectInfos.set(metaInfo.objectId, metaInfo);
-  }
-  delete(object) {
-    const metaInfo = getObjectSyncMetaInfo(object);
-    if (!metaInfo)
-      return false;
-    return this._trackedObjectInfos.delete(metaInfo.objectId);
-  }
-  deleteById(objectId) {
-    return this._trackedObjectInfos.delete(objectId);
-  }
-  get(objectId) {
-    const metaInfo = this._trackedObjectInfos.get(objectId);
-    return metaInfo?.object ?? null;
-  }
-  has(object) {
-    const metaInfo = getObjectSyncMetaInfo(object);
-    if (!metaInfo)
-      return false;
-    return this._trackedObjectInfos.has(metaInfo.objectId);
-  }
-  hasById(objectId) {
-    return this._trackedObjectInfos.has(objectId);
-  }
-  get allMetaInfos() {
-    const result = [];
-    this._trackedObjectInfos.forEach((info) => result.push(info));
-    return result;
-  }
-  get all() {
-    const result = [];
-    this._trackedObjectInfos.forEach((info) => result.push(info.object));
-    return result;
-  }
-};
-
-// build/tracker/interfaces.js
-var onConvertedToTrackable = Symbol("onConvertedToTrackable");
-var onTick = Symbol("onTick");
-function hasOnConvertedToTrackable(obj) {
-  return onConvertedToTrackable in obj;
-}
-function hasOnTick(obj) {
-  return onTick in obj;
-}
-function invokeOnConvertedToTrackable(obj, info) {
-  if (hasOnConvertedToTrackable(obj)) {
-    obj[onConvertedToTrackable](info);
-  }
-}
-function invokeOnTick(obj) {
-  if (hasOnTick(obj)) {
-    obj[onTick]();
-  }
-}
-
-// build/shared/syncableArray.js
-var __esDecorate = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
-  function accept(f) {
-    if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
-    return f;
-  }
-  var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-  var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-  var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-  var _, done = false;
-  for (var i = decorators.length - 1; i >= 0; i--) {
-    var context = {};
-    for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-    for (var p in contextIn.access) context.access[p] = contextIn.access[p];
-    context.addInitializer = function(f) {
-      if (done) throw new TypeError("Cannot add initializers after decoration has completed");
-      extraInitializers.push(accept(f || null));
-    };
-    var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
-    if (kind === "accessor") {
-      if (result === void 0) continue;
-      if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-      if (_ = accept(result.get)) descriptor.get = _;
-      if (_ = accept(result.set)) descriptor.set = _;
-      if (_ = accept(result.init)) initializers.unshift(_);
-    } else if (_ = accept(result)) {
-      if (kind === "field") initializers.unshift(_);
-      else descriptor[key] = _;
-    }
-  }
-  if (target) Object.defineProperty(target, contextIn.name, descriptor);
-  done = true;
-};
-var __runInitializers = function(thisArg, initializers, value) {
-  var useValue = arguments.length > 2;
-  for (var i = 0; i < initializers.length; i++) {
-    value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
-  }
-  return useValue ? value : void 0;
-};
-var SyncableArray = (() => {
-  var _a;
-  let _classDecorators = [syncObject({
-    typeId: "SyncableArray",
-    properties: {
-      _changes: {},
-      _creation: {}
-    }
-  })];
-  let _classDescriptor;
-  let _classExtraInitializers = [];
-  let _classThis;
-  var SyncableArray2 = (_a = class {
-    constructor(initial = []) {
-      __publicField(this, "_values", []);
-      __publicField(this, "_changes", []);
-      __publicField(this, "_creation", []);
-      this.push(...initial);
-    }
-    get value() {
-      return this._values;
-    }
-    set value(value) {
-      this.clear();
-      this.push(...value);
-    }
-    clear() {
-      this.length = 0;
-    }
-    changeAt(index, value) {
-      this._values[index] = value;
-      this.onRemoved(index, [value]);
-      this.onAdded(index, [value]);
-      const hostObjectInfo = getTrackerObjectInfo(this);
-      if (hostObjectInfo) {
-        this._creation[index] = this.convertItemToPropertyInfo(hostObjectInfo, value);
-        this.addChange({ start: index, deleteCount: 1, items: this.convertItemsToPropertyInfos(hostObjectInfo, [value]) });
-      }
-    }
-    get length() {
-      return this._values.length;
-    }
-    set length(value) {
-      if (value < this._values.length) {
-        this.splice(value, this._values.length - value);
-      } else if (value > this._values.length) {
-        this.push(...new globalThis.Array(value - this._values.length).fill(void 0));
-      }
-    }
-    push(...items) {
-      if (items.length === 0)
-        return this._values.length;
-      const startIndex = this._values.length;
-      this._values.push(...items);
-      const hostObjectInfo = getTrackerObjectInfo(this);
-      if (hostObjectInfo) {
-        this._creation.push(...this.convertItemsToPropertyInfos(hostObjectInfo, items));
-        this.addChange({ start: startIndex, deleteCount: 0, items: this.convertItemsToPropertyInfos(hostObjectInfo, items) });
-      }
-      this.onAdded(startIndex, items);
-      return this._values.length;
-    }
-    convertPropertyInfosToItems(items, client, clientConnection) {
-      return items.map((item) => client.getPropertyValue(item, clientConnection));
-    }
-    splice(start, deleteCount, ...items) {
-      deleteCount ?? (deleteCount = this._values.length - start);
-      if (deleteCount === 0 && items.length === 0)
-        return [];
-      const removedItems = this._values.splice(start, deleteCount, ...items);
-      if (removedItems.length > 0)
-        this.onRemoved(start, removedItems);
-      if (items.length > 0)
-        this.onAdded(start, items);
-      const hostObjectInfo = getTrackerObjectInfo(this);
-      if (hostObjectInfo) {
-        const convertedItems = this.convertItemsToPropertyInfos(hostObjectInfo, items);
-        this._creation.splice(start, deleteCount, ...convertedItems);
-        this.addChange({ start, deleteCount, items: convertedItems });
-      }
-      return removedItems;
-    }
-    addChange(pendingChange) {
-      this.onPropertyChanged("_changes", this._changes);
-      while (pendingChange) {
-        const lastChange = this._changes[this._changes.length - 1];
-        if (!lastChange) {
-          this._changes.push(pendingChange);
-          return;
-        }
-        if (lastChange.deleteCount === 0 && pendingChange.deleteCount === 0 && lastChange.start + lastChange.items.length === pendingChange.start) {
-          lastChange.items.push(...pendingChange.items);
-          pendingChange = this._changes.pop();
-          continue;
-        }
-        if (lastChange.deleteCount === 0 && pendingChange.deleteCount > 0 && pendingChange.items.length === 0 && lastChange.start + lastChange.items.length === pendingChange.start + pendingChange.deleteCount && pendingChange.start >= lastChange.start) {
-          const removeCount = pendingChange.deleteCount;
-          const newLength = lastChange.items.length - removeCount;
-          if (newLength > 0) {
-            lastChange.items.length = newLength;
-            pendingChange = this._changes.pop();
-            continue;
-          } else {
-            this._changes.pop();
-            pendingChange = pendingChange;
-            continue;
-          }
-        }
-        if (lastChange.deleteCount === 0 && pendingChange.deleteCount > 0 && pendingChange.items.length === 0 && pendingChange.start >= lastChange.start && pendingChange.start < lastChange.start + lastChange.items.length && pendingChange.start + pendingChange.deleteCount <= lastChange.start + lastChange.items.length) {
-          const relativeStart = pendingChange.start - lastChange.start;
-          lastChange.items.splice(relativeStart, pendingChange.deleteCount);
-          pendingChange = this._changes.pop();
-          continue;
-        }
-        this._changes.push(pendingChange);
-        return;
-      }
-    }
-    convertItemsToPropertyInfos(serverObjectInfo, items) {
-      return items.map((item) => this.convertItemToPropertyInfo(serverObjectInfo, item));
-    }
-    convertItemToPropertyInfo(serverObjectInfo, item) {
-      const metaInfo = serverObjectInfo.convertToTrackableObjectReference(item);
-      const transformed = {
-        value: item,
-        objectId: metaInfo?.objectId,
-        [isPropertyInfoSymbol]: true
-      };
-      return transformed;
-    }
-    [Symbol.iterator]() {
-      return this._values[Symbol.iterator]();
-    }
-    onPropertyChanged(property, value) {
-      const host = getTrackerObjectInfo(this);
-      if (!host)
-        return;
-      host.onPropertyChanged(property, value);
-    }
-    [onTick]() {
-      this._changes = [];
-    }
-    [onConvertedToTrackable](hostObjectInfo) {
-      this._creation = [...this.convertItemsToPropertyInfos(hostObjectInfo, this._values)];
-      this.onPropertyChanged("_creation", this._creation);
-      this.onPropertyChanged("_changes", this._changes);
-    }
-    [onUpdateProperty](key, value, isForCreate, client, clientConnection) {
-      if (isForCreate && key === "_creation") {
-        this.value = this.convertPropertyInfosToItems(value, client, clientConnection);
-      } else if (!isForCreate && key === "_changes") {
-        this.applyTrackableArrayChanges(this._values, value, client, clientConnection);
-      }
-      return true;
-    }
-    applyTrackableArrayChanges(arr, changes, client, clientConnection) {
-      for (const change of changes) {
-        const newItems = this.convertPropertyInfosToItems(change.items, client, clientConnection);
-        const removedItems = arr.splice(change.start, change.deleteCount, ...newItems);
-        if (removedItems.length > 0)
-          this.onRemoved(change.start, removedItems);
-        if (change.items.length > 0)
-          this.onAdded(change.start, newItems);
-      }
-      return arr;
-    }
-    toJSON() {
-      return this._values;
-    }
-    toValue() {
-      return this._values;
-    }
-    onRemoved(start, items) {
-    }
-    onAdded(start, items) {
-    }
-  }, _classThis = _a, (() => {
-    const _metadata = typeof Symbol === "function" && Symbol.metadata ? /* @__PURE__ */ Object.create(null) : void 0;
-    __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
-    SyncableArray2 = _classThis = _classDescriptor.value;
-    if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
-    __runInitializers(_classThis, _classExtraInitializers);
-  })(), _a);
-  return SyncableArray2 = _classThis;
-})();
-
 // build/shared/eventEmitter.js
 var EventEmitter = class {
   constructor() {
@@ -963,88 +50,134 @@ var EventEmitter = class {
   }
 };
 
-// build/shared/syncableObservableArray.js
-var __esDecorate2 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
-  function accept(f) {
-    if (f !== void 0 && typeof f !== "function") throw new TypeError("Function expected");
-    return f;
+// build/decorators/base.js
+var nothing = Symbol("nothing");
+var ObjectSyncMetaInfo = class extends EventEmitter {
+  reportPropertyChanged(instance, propertyInfo, propertyKey, value) {
+    this.emit("propertyChanged", propertyInfo, instance, propertyKey, value);
   }
-  var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
-  var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
-  var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
-  var _, done = false;
-  for (var i = decorators.length - 1; i >= 0; i--) {
-    var context = {};
-    for (var p in contextIn) context[p] = p === "access" ? {} : contextIn[p];
-    for (var p in contextIn.access) context.access[p] = contextIn.access[p];
-    context.addInitializer = function(f) {
-      if (done) throw new TypeError("Cannot add initializers after decoration has completed");
-      extraInitializers.push(accept(f || null));
-    };
-    var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
-    if (kind === "accessor") {
-      if (result === void 0) continue;
-      if (result === null || typeof result !== "object") throw new TypeError("Object expected");
-      if (_ = accept(result.get)) descriptor.get = _;
-      if (_ = accept(result.set)) descriptor.set = _;
-      if (_ = accept(result.init)) initializers.unshift(_);
-    } else if (_ = accept(result)) {
-      if (kind === "field") initializers.unshift(_);
-      else descriptor[key] = _;
-    }
-  }
-  if (target) Object.defineProperty(target, contextIn.name, descriptor);
-  done = true;
 };
-var __runInitializers2 = function(thisArg, initializers, value) {
-  var useValue = arguments.length > 2;
-  for (var i = 0; i < initializers.length; i++) {
-    value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+var metaInfoByValue = /* @__PURE__ */ new WeakMap();
+function ensureObjectSyncMetaInfo(instance) {
+  let metaInfo = metaInfoByValue.get(instance);
+  if (!metaInfo) {
+    metaInfo = new ObjectSyncMetaInfo();
+    metaInfoByValue.set(instance, metaInfo);
   }
-  return useValue ? value : void 0;
-};
-var SyncableObservableArray = (() => {
-  var _a;
-  let _classDecorators = [syncObject({
-    typeId: "SyncableObservableArray"
-  })];
-  let _classDescriptor;
-  let _classExtraInitializers = [];
-  let _classThis;
-  let _classSuper = SyncableArray;
-  var SyncableObservableArray2 = (_a = class extends _classSuper {
-    constructor(initial = []) {
-      super();
-      __publicField(this, "_eventEmitter", new EventEmitter());
-      this.push(...initial);
+  return metaInfo;
+}
+function getObjectSyncMetaInfo(instance) {
+  return metaInfoByValue.get(instance) || null;
+}
+
+// build/decorators/syncObject.js
+var TRACKABLE_CONSTRUCTOR_INFO = Symbol("trackableConstructor");
+var allSyncObjectTypes = /* @__PURE__ */ new Set();
+function syncObject(settings) {
+  return function syncObject2(target, context) {
+    settings ?? (settings = {});
+    settings.typeId ?? (settings.typeId = context.name);
+    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
+    trackableInfo.typeId = settings.typeId;
+    trackableInfo.clientTypeId = settings.clientTypeId;
+    trackableInfo.constructorArguments = settings.constructorArguments;
+    if (settings.properties) {
+      for (const [propertyKey, propertySettings] of Object.entries(settings.properties)) {
+        trackableInfo.trackedProperties.set(propertyKey, {
+          ...propertySettings
+        });
+      }
     }
-    onRemoved(start, items) {
-      this._eventEmitter.emit("removed", items, start);
+    if (settings.methods) {
+      for (const [methodKey, methodSettings] of Object.entries(settings.methods)) {
+        trackableInfo.trackedMethods.set(methodKey, {
+          ...methodSettings
+        });
+      }
     }
-    onAdded(start, items) {
-      this._eventEmitter.emit("added", items, start);
+    allSyncObjectTypes.add(target);
+  };
+}
+function ensureTrackableConstructorInfo(metadata) {
+  const oldTrackableInfo = metadata[TRACKABLE_CONSTRUCTOR_INFO] ?? {
+    trackedProperties: /* @__PURE__ */ new Map(),
+    trackedMethods: /* @__PURE__ */ new Map(),
+    isAutoTrackable: false,
+    clientTypeId: void 0
+  };
+  const newTrackableInfo = {
+    trackedProperties: new Map(oldTrackableInfo.trackedProperties),
+    trackedMethods: new Map(oldTrackableInfo.trackedMethods),
+    typeId: oldTrackableInfo.typeId,
+    clientTypeId: oldTrackableInfo.clientTypeId
+  };
+  metadata[TRACKABLE_CONSTRUCTOR_INFO] = newTrackableInfo;
+  return newTrackableInfo;
+}
+function getTrackableTypeInfo(ctor) {
+  const trackableInfo = ctor[Symbol.metadata]?.[TRACKABLE_CONSTRUCTOR_INFO];
+  return trackableInfo ?? null;
+}
+function beforeSendObjectToClient(constructor, instance, typeId, destinationClientConnection) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return nothing;
+  }
+  if (constructorInfo.clientTypeId === void 0) {
+    return typeId;
+  }
+  if (constructorInfo.clientTypeId === null || constructorInfo.clientTypeId === nothing) {
+    return nothing;
+  }
+  if (typeof constructorInfo.clientTypeId === "string") {
+    return constructorInfo.clientTypeId;
+  }
+  if (typeof constructorInfo.clientTypeId !== "function") {
+    throw new Error(`Invalid clientTypeId in trackable constructor info.`);
+  }
+  const newConstructorInfo = getTrackableTypeInfo(constructorInfo.clientTypeId);
+  if (newConstructorInfo && newConstructorInfo.typeId) {
+    return newConstructorInfo.typeId;
+  }
+  const result = constructorInfo.clientTypeId.call(instance, { instance, constructor, typeId, destinationClientConnection });
+  if (result === null || result === void 0 || result === nothing) {
+    return nothing;
+  }
+  if (typeof result === "string") {
+    return result;
+  }
+  if (typeof result === "function") {
+    const newConstructorInfo2 = getTrackableTypeInfo(result);
+    if (newConstructorInfo2 && newConstructorInfo2.typeId) {
+      return newConstructorInfo2.typeId;
     }
-    on(event, callback) {
-      this._eventEmitter.on(event, callback);
-    }
-    once(event, callback) {
-      this._eventEmitter.once(event, callback);
-    }
-    off(event, callback) {
-      this._eventEmitter.off(event, callback);
-    }
-    listenerCount(event, callback) {
-      return this._eventEmitter.listenerCount(event, callback);
-    }
-  }, _classThis = _a, (() => {
-    const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
-    __esDecorate2(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
-    SyncableObservableArray2 = _classThis = _classDescriptor.value;
-    if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
-    __runInitializers2(_classThis, _classExtraInitializers);
-  })(), _a);
-  return SyncableObservableArray2 = _classThis;
-})();
+    throw new Error(`The constructor returned from beforeSendToClient does not have a typeId.`);
+  }
+  return typeId;
+}
+
+// build/shared/messages.js
+var isPropertyInfoSymbol = Symbol("isPropertyInfo");
+var CreateMessageType = "create";
+var ChangeMessageType = "change";
+var DeleteMessageType = "delete";
+var ExecuteMessageType = "execute";
+var ExecuteFinishedMessageType = "executeFinished";
+function isExecuteObjectMessage(message) {
+  return message.type === ExecuteMessageType;
+}
+function isChangeObjectMessage(message) {
+  return message.type === ChangeMessageType;
+}
+function isCreateObjectMessage(message) {
+  return message.type === CreateMessageType;
+}
+function isDeleteObjectMessage(message) {
+  return message.type === DeleteMessageType;
+}
+function isExecuteFinishedObjectMessage(message) {
+  return message.type === ExecuteFinishedMessageType;
+}
 
 // build/shared/types.js
 function isIterable(input) {
@@ -1061,13 +194,6 @@ function forEachIterable(input, callback) {
     callback(item);
   }
 }
-function mapIterable(input, mapper) {
-  const result = [];
-  for (const item of toIterable(input)) {
-    result.push(mapper(item));
-  }
-  return result;
-}
 function hasInIterable(input, expected) {
   if (input instanceof Set) {
     return input.has(expected);
@@ -1079,824 +205,2059 @@ function hasInIterable(input, expected) {
   }
   return false;
 }
+function isPrimitiveValue(value) {
+  return value === void 0 || value === null || typeof value !== "object" && typeof value !== "function";
+}
+function isPromiseLike(value) {
+  return value && typeof value.then === "function" && typeof value.catch === "function";
+}
 
-// build/tracker/trackerObjectInfo.js
-var nextInvokeId = 0;
-function isForClientConnection(clientConnection, filter) {
-  let hasDesignation = filter.designations === void 0 || clientConnection.identity === void 0;
+// build/objectSync/clientFilter.js
+function isForClientToken(clientToken, filter) {
+  let hasDesignation = filter.identities === void 0 || clientToken.identity === void 0;
   if (!hasDesignation) {
-    hasDesignation = hasInIterable(filter.designations, clientConnection.identity);
+    hasDesignation = hasInIterable(filter.identities, clientToken.identity);
   }
-  let hasClientConnection = filter.clients === void 0;
+  let hasClientConnection = filter.clientTokens === void 0;
   if (!hasClientConnection) {
-    hasClientConnection = hasInIterable(filter.clients, clientConnection);
+    hasClientConnection = hasInIterable(filter.clientTokens, clientToken);
   }
   return filter.isExclusive === (hasDesignation && hasClientConnection);
 }
-var ChangeTrackerObjectInfo = class _ChangeTrackerObjectInfo extends ObjectInfoBase {
-  constructor(objectSyncMetaInfo, _tracker, _isRootObject, _objectIdPrefix) {
-    super(objectSyncMetaInfo);
-    __publicField(this, "_tracker");
-    __publicField(this, "_isRootObject");
-    __publicField(this, "_objectIdPrefix");
-    __publicField(this, "_changeSet", {});
-    __publicField(this, "_methodInvokeCalls", []);
-    __publicField(this, "_pendingMethodInvokeCalls", /* @__PURE__ */ new Map());
+
+// build/shared/objectInfo.js
+var ObjectInfo = class {
+  constructor(_owner, _objectId = null, instanceOrTypeId = null, _isRoot = false) {
+    __publicField(this, "_owner");
+    __publicField(this, "_objectId");
+    __publicField(this, "_isRoot");
+    __publicField(this, "_serializer", null);
+    __publicField(this, "_instance", null);
     __publicField(this, "_clientFilters", null);
-    __publicField(this, "_clients", /* @__PURE__ */ new Set());
-    __publicField(this, "_invokeProxy", null);
-    __publicField(this, "_lastMethodCallResult", null);
-    this._tracker = _tracker;
-    this._isRootObject = _isRootObject;
-    this._objectIdPrefix = _objectIdPrefix;
-  }
-  static create(settings) {
-    if (!settings.object || typeof settings.object !== "object")
-      return null;
-    const trackableTypeInfo = getTrackableTypeInfo(settings.object.constructor);
-    if (!trackableTypeInfo)
-      return null;
-    const metaInfo = ensureObjectSyncMetaInfo(settings);
-    if (!metaInfo) {
-      throw new Error("Failed to create HostObjectInfo: unable to ensure ObjectSyncMetaInfo.");
+    __publicField(this, "_isOwned", false);
+    __publicField(this, "_referenceCountByClient", /* @__PURE__ */ new Map());
+    this._owner = _owner;
+    this._objectId = _objectId;
+    this._isRoot = _isRoot;
+    if (typeof instanceOrTypeId === "string") {
+      this._objectId ?? (this._objectId = this._owner.generateObjectId());
+    } else {
+      this._instance = instanceOrTypeId;
+      this._objectId ?? (this._objectId = this._owner.generateObjectId(this._instance));
     }
-    if (metaInfo.trackerInfo)
-      return metaInfo.trackerInfo;
-    metaInfo.trackerInfo = new _ChangeTrackerObjectInfo(metaInfo, settings.owner, settings.isRoot, settings.objectIdPrefix);
-    invokeOnConvertedToTrackable(metaInfo.object, metaInfo.trackerInfo);
-    trackableTypeInfo.trackedProperties.forEach((propertyInfo, key) => {
-      metaInfo.trackerInfo.onPropertyChanged(key, settings.object[key]);
-    });
-    return metaInfo.trackerInfo;
   }
-  get tracker() {
-    return this._tracker;
+  initializeSerializer(instanceOrTypeId = null) {
+    const Serializer = this._owner.findSerializer(instanceOrTypeId);
+    this._serializer = new Serializer(this);
+    if (this._instance)
+      this._serializer.onInstanceSet(false);
   }
-  get clients() {
-    return this._clients;
+  get isOwned() {
+    return this._isOwned;
   }
-  get isRootObject() {
-    return this._isRootObject;
+  set isOwned(value) {
+    this._isOwned = this._isOwned || value;
   }
-  set isRootObject(value) {
-    this._isRootObject = value;
+  get objectId() {
+    return this._objectId;
   }
-  get properties() {
-    return this._changeSet;
+  get instance() {
+    return this._instance;
   }
-  get invokeProxy() {
-    return this._invokeProxy ?? (this._invokeProxy = new Proxy(this.object, {
-      get: (obj, prop) => {
-        const value = obj[prop];
-        if (typeof value === "function" && typeof prop === "string") {
-          return (...args) => {
-            return this.invoke(prop, ...args);
-          };
-        }
-        return value;
+  set instance(value) {
+    if (this._instance)
+      throw new Error("Instance is already set and cannot be changed.");
+    this._instance = value;
+    this._owner.reportInstanceCreated(value, this._objectId);
+  }
+  get isRoot() {
+    return this._isRoot;
+  }
+  set isRoot(value) {
+    this._isRoot = value;
+  }
+  get serializer() {
+    return this._serializer;
+  }
+  get owner() {
+    return this._owner;
+  }
+  addReference(clientToken) {
+    this._referenceCountByClient.set(clientToken, (this._referenceCountByClient.get(clientToken) ?? 0) + 1);
+    let isDisposed = false;
+    return {
+      dispose: () => {
+        if (isDisposed)
+          return;
+        isDisposed = true;
+        this.removeReference(clientToken);
       }
-    }));
+    };
   }
-  isForClient(client) {
+  get isOrphaned() {
+    if (this._isRoot || !this._isOwned)
+      return false;
+    for (const count of this._referenceCountByClient.values()) {
+      if (count > 0)
+        return false;
+    }
+    return true;
+  }
+  mustDeleteForClient(clientToken) {
+    return this._instance !== null && this._isOwned && !this._isRoot && this._serializer.clients.has(clientToken) && (this._referenceCountByClient.get(clientToken) ?? 0) <= 0;
+  }
+  removeReference(clientToken) {
+    const currentCount = this._referenceCountByClient.get(clientToken);
+    if (currentCount === void 0)
+      return;
+    if (currentCount <= 1) {
+      this._referenceCountByClient.delete(clientToken);
+    } else {
+      this._referenceCountByClient.set(clientToken, currentCount - 1);
+    }
+  }
+  setClientRestriction(filter) {
+    this._clientFilters = {
+      clientTokens: filter.clientTokens ? toIterable(filter.clientTokens, true) : void 0,
+      identities: filter.identities ? toIterable(filter.identities, true) : void 0,
+      isExclusive: filter.isExclusive ?? true
+    };
+  }
+  isForClientToken(clientToken) {
     if (!this._clientFilters)
       return true;
     const filter = this._clientFilters;
-    return isForClientConnection(client, filter);
+    return isForClientToken(clientToken, filter);
   }
   removeClientRestrictions() {
     this._clientFilters = null;
   }
-  setClientRestriction(filter) {
-    this._clientFilters = {
-      clients: filter.clients ? toIterable(filter.clients, true) : void 0,
-      designations: filter.designations ? toIterable(filter.designations, true) : void 0,
-      isExclusive: filter.isExclusive ?? true
-    };
+};
+
+// build/shared/objectPool.js
+var ObjectPool = class {
+  constructor() {
+    __publicField(this, "_objectToInfo", /* @__PURE__ */ new Map());
+    __publicField(this, "_objectIdToInfo", /* @__PURE__ */ new Map());
   }
-  onPropertyChanged(key, value) {
-    let current = this._changeSet[key];
-    if (!current) {
-      current = { hasPendingChanges: true, value };
-      this._changeSet[key] = current;
-      return;
-    }
-    if (current.value === value)
-      return;
-    current.value = value;
-    current.hasPendingChanges = true;
+  hasObject(instance) {
+    return this._objectToInfo.has(instance);
   }
-  createPropertyInfo(value) {
-    const trackable = this.convertToTrackableObjectReference(value);
-    const paramInfo = {
-      value,
-      objectId: trackable?.objectSyncMetaInfo.objectId,
-      [isPropertyInfoSymbol]: true
-    };
-    return paramInfo;
+  hasObjectId(objectId) {
+    return this._objectIdToInfo.has(objectId);
   }
-  onMethodExecute(method, parameters) {
-    const message = {
-      type: "execute",
-      id: nextInvokeId++,
-      objectId: this.objectId,
-      parameters,
-      method
-    };
-    this._methodInvokeCalls.push(message);
-    let onRemainingClientsResolved;
-    const result = new Promise((resolve) => {
-      onRemainingClientsResolved = resolve;
-    });
-    this._pendingMethodInvokeCalls.set(message.id, {
-      id: message.id,
-      resultByClient: /* @__PURE__ */ new Map(),
-      remainingClients: [],
-      result,
-      onRemainingClientsResolved
-    });
-    this._lastMethodCallResult = result;
-    return result;
+  getInfoByObject(instance) {
+    return this._objectToInfo.get(instance);
   }
-  getInvokeResults(method) {
-    const result = this._lastMethodCallResult;
-    this._lastMethodCallResult = null;
-    return result;
+  getObjectById(objectId) {
+    return this._objectIdToInfo.get(objectId)?.instance;
   }
-  invoke(method, ...args) {
-    const hostResult = this.object[method](...args);
-    const clientResults = this.getInvokeResults(method);
-    return { clientResults, hostResult };
+  getInfoById(objectId) {
+    return this._objectIdToInfo.get(objectId);
   }
-  onClientMethodExecuteResultReceived(methodExecuteResult, client) {
-    const pendingCall = this._pendingMethodInvokeCalls.get(methodExecuteResult.id);
-    if (!pendingCall)
-      return;
-    if (this.clients.has(client)) {
-      pendingCall.resultByClient.set(client, new Promise((resolve, reject) => {
-        if (methodExecuteResult.status === "resolved") {
-          resolve(methodExecuteResult.result);
-        } else {
-          reject(methodExecuteResult.error);
-        }
-      }));
-    }
-    pendingCall.remainingClients = pendingCall.remainingClients.filter((c) => c !== client);
-    if (pendingCall.remainingClients.length === 0) {
-      this._pendingMethodInvokeCalls.delete(methodExecuteResult.id);
-      pendingCall.onRemainingClientsResolved(pendingCall.resultByClient);
+  get objects() {
+    return Array.from(this._objectIdToInfo.values()).map((info) => info.instance);
+  }
+  get infos() {
+    return Array.from(this._objectIdToInfo.values());
+  }
+  objectInfosToDelete(clientToken) {
+    return this.infos.filter((info) => info.mustDeleteForClient(clientToken));
+  }
+  orphanedObjectInfos(clientToken) {
+    return this.infos.filter((info) => info.isOrphaned);
+  }
+  get ownedObjects() {
+    return this.infos.filter((info) => info.isOwned).map((info) => info.instance);
+  }
+  add(info) {
+    const { instance, objectId } = info;
+    if (instance)
+      this._objectToInfo.set(instance, info);
+    this._objectIdToInfo.set(objectId, info);
+    return info;
+  }
+  deleteByObject(instance) {
+    const info = this._objectToInfo.get(instance);
+    if (info) {
+      this._objectIdToInfo.delete(info.objectId);
+      this._objectToInfo.delete(instance);
     }
   }
-  convertToTrackableObjectReference(target) {
-    if (target && typeof target === "object") {
-      return _ChangeTrackerObjectInfo.create({
-        object: target,
-        isRoot: false,
-        objectIdPrefix: this._objectIdPrefix,
-        owner: this.tracker
-      });
+  deleteById(objectId) {
+    const info = this._objectIdToInfo.get(objectId);
+    if (info) {
+      this._objectToInfo.delete(info.instance);
+      this._objectIdToInfo.delete(objectId);
     }
-    return null;
   }
-  getCreateMessage(client) {
-    const typeIdOrNothing = beforeSendObjectToClient(this.object.constructor, this.object, this.typeId, client);
-    if (typeIdOrNothing === nothing)
-      return null;
-    const typeId = typeIdOrNothing;
-    const result = {
-      type: "create",
-      objectId: this.objectId,
-      typeId,
-      properties: this.getProperties(client, false)
-    };
-    return result;
+  onObjectSet(info) {
+    this._objectToInfo.set(info.instance, info);
   }
-  getDeleteMessage() {
-    const result = {
-      type: "delete",
-      objectId: this.objectId
-    };
-    return result;
+  findOne(constructor, objectId) {
+    return this.infos.find((info) => {
+      return info.instance && info.instance instanceof constructor && (objectId === void 0 || info.objectId === objectId);
+    })?.instance;
   }
-  onClientRemoved(clientConnection) {
-    this.clients.delete(clientConnection);
-    this.cancelPendingMethodCalls(clientConnection);
-  }
-  cancelPendingMethodCalls(clientConnection) {
-    this._pendingMethodInvokeCalls.forEach((pendingCall) => {
-      pendingCall.remainingClients.forEach((client) => {
-        if (clientConnection && client !== clientConnection)
-          return;
-        this.onClientMethodExecuteResultReceived({
-          id: pendingCall.id,
-          status: "rejected",
-          error: new Error("Object deleted before method could be executed"),
-          objectId: this.objectId,
-          result: void 0
-        }, client);
-      });
-    });
-  }
-  getChangeMessage(client) {
-    if (!this.clients.has(client)) {
-      return null;
-    }
-    const properties = this.getProperties(client, true);
-    if (Object.keys(properties).length === 0)
-      return null;
-    const result = {
-      type: "change",
-      objectId: this.objectId,
-      properties
-    };
-    return result;
-  }
-  getExecuteMessages(client) {
-    const result = [];
-    if (!this.clients.has(client)) {
-      return result;
-    }
-    for (const methodExecuteCall of this._methodInvokeCalls) {
-      const args = methodExecuteCall.parameters.slice();
-      if (beforeExecuteOnClient(this.object.constructor, this.object, methodExecuteCall.method, args, client) === false) {
-        continue;
-      }
-      result.push({
-        ...methodExecuteCall,
-        parameters: args.map((arg) => this.createPropertyInfo(arg))
-      });
-    }
-    return result;
-  }
-  getProperties(client, includeChangedOnly) {
-    const result = {};
-    Object.keys(this._changeSet).forEach((key) => {
-      let propertyStateInfo = this._changeSet[key];
-      if (includeChangedOnly && !propertyStateInfo.hasPendingChanges)
-        return;
-      const finalValue = beforeSendPropertyToClient(this.object.constructor, this.object, key, propertyStateInfo.value, client);
-      if (finalValue === nothing)
-        return;
-      const propertyInfo = this.createPropertyInfo(finalValue);
-      const clientPropertyInfo = this.serializePropertyInfo(propertyInfo);
-      if (clientPropertyInfo)
-        result[key] = clientPropertyInfo;
-    });
-    return result;
-  }
-  serializePropertyInfo(propertyInfo) {
-    let clientPropertyInfo = {
-      objectId: propertyInfo.objectId,
-      value: propertyInfo.value,
-      [isPropertyInfoSymbol]: true
-    };
-    if (propertyInfo.objectId === void 0 && propertyInfo.objectId === null) {
-      delete clientPropertyInfo.objectId;
-    }
-    if (clientPropertyInfo.value && clientPropertyInfo.objectId === void 0 && typeof clientPropertyInfo.value === "object") {
-      const serializedValue = this.serializeValue(clientPropertyInfo.value);
-      if (serializedValue === null) {
-        clientPropertyInfo.value = clientPropertyInfo.value;
-      } else {
-        clientPropertyInfo.value = serializedValue.value;
-        clientPropertyInfo.typeId = serializedValue.typeId;
-      }
-    }
-    return clientPropertyInfo;
-  }
-  serializeValue(value) {
-    return this.tracker.serializeValue(value, this);
-  }
-  tick() {
-    Object.keys(this._changeSet).forEach((key) => {
-      const propertyInfo = this._changeSet[key];
-      propertyInfo.hasPendingChanges = false;
-    });
-    this._methodInvokeCalls.length = 0;
-    invokeOnTick(this.objectSyncMetaInfo.object);
+  findAll(constructor) {
+    return this.infos.filter((info) => {
+      return info.instance && info.instance instanceof constructor;
+    }).map((info) => info.instance);
   }
 };
 
-// build/tracker/tracker.js
-var ObjectChangeTracker = class {
-  constructor(settings) {
-    __publicField(this, "_trackedObjectPool");
+// build/serialization/serializers/base.js
+var defaultIntrinsicSerializers = [];
+
+// build/serialization/serializer.js
+var TypeSerializer = class {
+  constructor(_objectInfo) {
+    __publicField(this, "_objectInfo");
     __publicField(this, "_clients", /* @__PURE__ */ new Set());
-    __publicField(this, "_serializers", /* @__PURE__ */ new Map());
-    __publicField(this, "_nativeTypeSerializers", []);
+    __publicField(this, "_storedReferencesByKey", /* @__PURE__ */ new Map());
+    __publicField(this, "_hasPendingChanges", false);
+    this._objectInfo = _objectInfo;
+  }
+  static canSerialize(instanceOrTypeId) {
+    throw new Error("Not implemented");
+  }
+  get hasPendingChanges() {
+    return this._hasPendingChanges;
+  }
+  set hasPendingChanges(value) {
+    if (this._hasPendingChanges)
+      return;
+    this._hasPendingChanges = value;
+    this.reportPendingMessages();
+  }
+  get objectId() {
+    return this._objectInfo.objectId;
+  }
+  get instance() {
+    return this._objectInfo.instance;
+  }
+  set instance(value) {
+    this._objectInfo.instance = value;
+    this.onInstanceSet(true);
+  }
+  onInstanceSet(createdByCreateObjectMessage) {
+    if (!createdByCreateObjectMessage) {
+      this.reportPendingMessages();
+    }
+  }
+  get clients() {
+    return this._clients;
+  }
+  onClientConnectionRemoved(clientToken) {
+    this._clients.delete(clientToken);
+    this._storedReferencesByKey.forEach((storedReferencesByClient, key) => {
+      const storedReference = storedReferencesByClient.get(clientToken);
+      storedReference?.dispose();
+    });
+  }
+  clearStates(clientToken) {
+    if (!clientToken)
+      this._hasPendingChanges = false;
+  }
+  reportPendingMessages() {
+    this._objectInfo.owner.reportPendingMessagesForObject(this._objectInfo);
+  }
+  serializeValue(value, clientToken) {
+    return this._objectInfo.owner.serializeValue(value, clientToken);
+  }
+  deserializeValue(value, clientToken) {
+    return this._objectInfo.owner.deserializeValue(value, clientToken);
+  }
+  storeReference(value, clientConnectionOrKey, clientToken) {
+    let key = void 0;
+    if (clientConnectionOrKey && typeof clientConnectionOrKey === "object") {
+      clientToken = clientConnectionOrKey;
+    } else if (clientConnectionOrKey !== void 0) {
+      key = clientConnectionOrKey;
+    }
+    return this.storeReferenceInternal(value, clientToken, key);
+  }
+  clearAllStoredReferencesWithKey(key) {
+    const storedReferencesByClient = this._storedReferencesByKey.get(key);
+    if (storedReferencesByClient) {
+      storedReferencesByClient.forEach((storedReference) => {
+        storedReference.dispose();
+      });
+    }
+  }
+  clearAllStoredReferencesWithClientConnection(clientToken) {
+    this._storedReferencesByKey.forEach((storedReferencesByClient, key) => {
+      const storedReference = storedReferencesByClient.get(clientToken);
+      storedReference?.dispose();
+    });
+  }
+  storeReferenceInternal(value, clientToken, key) {
+    let storedReferencesByClient = this._storedReferencesByKey.get(key);
+    if (!storedReferencesByClient) {
+      storedReferencesByClient = /* @__PURE__ */ new Map();
+      this._storedReferencesByKey.set(key, storedReferencesByClient);
+    }
+    const previousStoredReference = storedReferencesByClient.get(clientToken);
+    previousStoredReference?.dispose();
+    if (isPrimitiveValue(value)) {
+      return {
+        dispose() {
+        }
+      };
+    }
+    const storedReference = this._objectInfo.owner.trackInternal(value).addReference(clientToken);
+    let isDisposed = false;
+    const finalStoredReference = {
+      dispose: () => {
+        if (isDisposed)
+          return;
+        isDisposed = true;
+        storedReference.dispose();
+        storedReferencesByClient.delete(clientToken);
+        if (storedReferencesByClient.size === 0) {
+          this._storedReferencesByKey.delete(key);
+        }
+      }
+    };
+    storedReferencesByClient.set(clientToken, finalStoredReference);
+    return finalStoredReference;
+  }
+  get dispatcher() {
+    return null;
+  }
+};
+var ExtendedTypeSerializer = class extends TypeSerializer {
+  constructor(objectInfo) {
+    super(objectInfo);
+    __publicField(this, "_messageTypeToHandler", /* @__PURE__ */ new Map());
+    this.registerMessageHandler("create", (message, clientToken) => this.onCreateMessageReceived(message, clientToken));
+    this.registerMessageHandler("change", (message, clientToken) => this.onChangeMessageReceived(message, clientToken));
+  }
+  registerMessageHandler(messageType, handler) {
+    this._messageTypeToHandler.set(messageType, handler);
+  }
+  async applyMessage(message, clientToken) {
+    const handler = this._messageTypeToHandler.get(message.type);
+    if (handler) {
+      await handler(message, clientToken);
+    } else if (message.type === "create") {
+      throw new Error(`No handler registered for message type '${message.type}' in serializer.`);
+    }
+  }
+  onChangeMessageReceived(message, clientToken) {
+  }
+};
+function MakeSimpleTypeSerializer(settings) {
+  const { type, typeId, serialize, deserialize } = settings;
+  return class SimpleTypeSerializer extends ExtendedTypeSerializer {
+    static canSerialize(instanceOrTypeId) {
+      if (typeof instanceOrTypeId === "string") {
+        return instanceOrTypeId === typeId;
+      } else {
+        return instanceOrTypeId instanceof type;
+      }
+    }
+    getTypeId(_clientConnection) {
+      return typeId;
+    }
+    generateMessages(_clientConnection, isNewClientConnection) {
+      const messages = [];
+      if (isNewClientConnection) {
+        messages.push({
+          type: "create",
+          objectId: this.objectId,
+          typeId,
+          data: serialize(this.instance)
+        });
+      }
+      return messages;
+    }
+    onCreateMessageReceived(message, clientToken) {
+      this.instance = deserialize(message.data);
+    }
+  };
+}
+
+// build/decorators/syncMethod.js
+function syncMethod(settings) {
+  settings ?? (settings = {});
+  return function syncMethod2(target, context) {
+    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
+    const methodInfo = {
+      ...settings
+    };
+    const methodName = context.name;
+    trackableInfo.trackedMethods.set(methodName, methodInfo);
+  };
+}
+function beforeExecuteOnClient(constructor, instance, methodKey, args, destinationClientConnection) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return false;
+  }
+  const methodInfo = constructorInfo.trackedMethods.get(methodKey);
+  if (!methodInfo || methodInfo.mode === "none" || methodInfo.mode === "applyOnly") {
+    return false;
+  }
+  if (methodInfo.beforeExecuteOnClient?.call(instance, { instance, key: methodKey, args, destinationClientConnection }) === false) {
+    return false;
+  }
+  return true;
+}
+function getSyncMethodInfo(constructor, propertyKey) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return null;
+  }
+  const propertyInfo = constructorInfo.trackedMethods.get(propertyKey);
+  return propertyInfo ?? null;
+}
+
+// build/decorators/syncProperty.js
+function syncProperty(settings) {
+  settings ?? (settings = {});
+  return function syncProperty2(target, context) {
+    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
+    const propertyInfo = {
+      ...settings
+    };
+    const propertyName = context.name;
+    trackableInfo.trackedProperties.set(propertyName, propertyInfo);
+    const result = {
+      set(value) {
+        target.set.call(this, value);
+        if (propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly")
+          return;
+        const metaInfo = getObjectSyncMetaInfo(this);
+        metaInfo?.reportPropertyChanged(this, propertyInfo, propertyName, value);
+      }
+    };
+    return result;
+  };
+}
+function checkCanApplyProperty(constructor, instance, propertyKey, isMethod, sourceClientConnection) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo)
+    return false;
+  const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
+  if (!propertyInfo)
+    return false;
+  if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly")
+    return;
+  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientConnection }) === false)
+    return false;
+  return true;
+}
+function beforeSendPropertyToClient(constructor, instance, propertyKey, value, destinationClientConnection) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return nothing;
+  }
+  const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
+  if (!propertyInfo) {
+    return nothing;
+  }
+  if (!propertyInfo.beforeSendToClient) {
+    return value;
+  }
+  return propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientConnection });
+}
+
+// build/serialization/serializers/syncObject/serializer.js
+var SyncObjectSerializer = class extends ExtendedTypeSerializer {
+  constructor(objectInfo) {
+    super(objectInfo);
+    __publicField(this, "_typeInfo", null);
+    __publicField(this, "_properties", /* @__PURE__ */ new Map());
+    __publicField(this, "_temporaryReferencesByClient", /* @__PURE__ */ new Map());
+    __publicField(this, "_pendingInvokeMethodInfosById", /* @__PURE__ */ new Map());
+    __publicField(this, "_methodInvokeResultsByClient", /* @__PURE__ */ new Map());
+    __publicField(this, "_nextInvokeId", 1);
+    __publicField(this, "_dispatcher");
+    this.registerMessageHandler("execute", (message, clientToken) => this.onExecuteMessageReceived(message, clientToken));
+    this.registerMessageHandler("executeFinished", (message, clientToken) => this.onExecuteFinishedMessageReceived(message, clientToken));
+  }
+  createTemporaryReference(value, clientToken) {
+    if (isPrimitiveValue(value)) {
+      return {
+        dispose() {
+        }
+      };
+    }
+    const storedReference = this._objectInfo.owner.trackInternal(value).addReference(clientToken);
+    let tempRefs = this._temporaryReferencesByClient.get(clientToken);
+    if (!tempRefs) {
+      tempRefs = [];
+      this._temporaryReferencesByClient.set(clientToken, tempRefs);
+    }
+    tempRefs.push(storedReference);
+    return storedReference;
+  }
+  onInstanceSet(createdByCreateObjectMessage) {
+    super.onInstanceSet(createdByCreateObjectMessage);
+    const metaInfo = ensureObjectSyncMetaInfo(this.instance);
+    metaInfo?.on("propertyChanged", (propertyInfo, instance, propertyKey, value) => {
+      this.reportPropertyChanged(propertyInfo, propertyKey, value);
+    });
+    if (createdByCreateObjectMessage)
+      return;
+    this._typeInfo = getTrackableTypeInfo(this.instance.constructor);
+    this._typeInfo.trackedProperties.forEach((propertyInfo, key) => {
+      this.reportPropertyChanged(propertyInfo, key, this.instance[key]);
+    });
+  }
+  async onCreateMessageReceived(message, clientToken) {
+    const constructorArguments = (message.data["[[constructor]]"] ?? []).map((arg) => {
+      return this.deserializeValue(arg, clientToken);
+    });
+    this.instance = new this.type(...constructorArguments);
+    await this.onChangeMessageReceived(message, clientToken);
+    this._properties.forEach((propertyValueInfo, propertyKey) => {
+      propertyValueInfo.hasPendingChanges = false;
+    });
+  }
+  onChangeMessageReceived(message, clientToken) {
+    for (const key of Object.keys(message.data)) {
+      if (!checkCanApplyProperty(this.instance.constructor, this.instance, key, false, clientToken))
+        continue;
+      const value = this.deserializeValue(message.data[key], clientToken);
+      const property = this._properties.get(key);
+      try {
+        if (property)
+          property.isBeeingApplied = true;
+        this.instance[key] = value;
+      } finally {
+        if (property)
+          property.isBeeingApplied = false;
+      }
+    }
+  }
+  async onExecuteMessageReceived(message, clientToken) {
+    if (typeof this.instance[message.method] !== "function") {
+      throw new Error(`Target with id ${message.objectId} has no method ${message.method}`);
+    }
+    const finishInvoke = (result, error) => {
+      let methodInvokeResults = this._methodInvokeResultsByClient.get(clientToken);
+      if (!methodInvokeResults) {
+        methodInvokeResults = [];
+        this._methodInvokeResultsByClient.set(clientToken, methodInvokeResults);
+      }
+      if (error)
+        methodInvokeResults.push({ objectId: message.objectId, invokeId: message.id, error });
+      else
+        methodInvokeResults.push({ objectId: message.objectId, invokeId: message.id, result });
+      this.reportPendingMessages();
+    };
+    if (!checkCanApplyProperty(this.instance.constructor, this.instance, message.method, true, clientToken)) {
+      finishInvoke(null, "Not allowed.");
+      return;
+    }
+    const parameters = message.parameters.map((value) => {
+      return this.deserializeValue(value, clientToken);
+    });
+    let resultOrPromise;
+    try {
+      resultOrPromise = this.instance[message.method](...parameters);
+    } catch (e) {
+      finishInvoke(null, e);
+      return;
+    }
+    if (isPromiseLike(resultOrPromise)) {
+      const promise = resultOrPromise.then((result) => {
+        finishInvoke(result, null);
+      }, (error) => {
+        finishInvoke(null, error);
+      });
+      const promiseHandlingType = getSyncMethodInfo(this.instance.constructor, message.method)?.promiseHandlingType ?? "normal";
+      if (promiseHandlingType === "await")
+        await promise;
+    } else {
+      finishInvoke(resultOrPromise, null);
+    }
+  }
+  onExecuteFinishedMessageReceived(message, clientToken) {
+    const pendingCall = this._pendingInvokeMethodInfosById.get(message.invokeId);
+    if (!pendingCall)
+      return;
+    const clientPromiseInfo = pendingCall.invokeMethodInfoByClient.get(clientToken);
+    if (!clientPromiseInfo)
+      return;
+    if ("error" in message) {
+      clientPromiseInfo.reject(message.error);
+    } else {
+      clientPromiseInfo.resolve(message.result);
+    }
+  }
+  generateCreateMessage(typeId, clientToken) {
+    const data = {};
+    const propertiesToOmit = /* @__PURE__ */ new Set();
+    if (this._typeInfo.constructorArguments !== void 0) {
+      const constructorArgumentsResult = typeof this._typeInfo.constructorArguments === "function" ? this._typeInfo.constructorArguments.call(this.instance, { instance: this.instance, constructor: this.type, typeId, destinationClientConnection: clientToken }) : this._typeInfo.constructorArguments;
+      const finalConstructorArguments = data["[[constructor]]"] = [];
+      if (Array.isArray(constructorArgumentsResult)) {
+        constructorArgumentsResult.forEach((propertyKey) => {
+          propertiesToOmit.add(propertyKey);
+          const propertyValueInfo = this._properties.get(propertyKey);
+          if (!propertyValueInfo) {
+            throw new Error(`Cannot use property '${propertyKey}' as constructor argument for type '${this.typeId}' because it is not a tracked property.`);
+          }
+          const value = propertyValueInfo.value;
+          const finalValue = beforeSendPropertyToClient(this.instance.constructor, this.instance, propertyKey, value, clientToken);
+          if (finalValue === nothing) {
+            this.storeReference(void 0, propertyKey, clientToken);
+            return;
+          }
+          this.storeReference(finalValue, propertyKey, clientToken);
+          finalConstructorArguments.push(this.serializeValue(finalValue, clientToken));
+        });
+      } else {
+        if (constructorArgumentsResult.propertiesToOmit) {
+          for (const prop of constructorArgumentsResult.propertiesToOmit) {
+            propertiesToOmit.add(prop);
+          }
+        }
+        constructorArgumentsResult.arguments.forEach((argument) => {
+          const transformedValue = this.serializeValue(argument, clientToken);
+          finalConstructorArguments.push(transformedValue);
+        });
+      }
+    }
+    this._properties.forEach((propertyValueInfo, propertyKey) => {
+      if (propertiesToOmit.has(propertyKey))
+        return;
+      const value = propertyValueInfo.value;
+      const finalValue = beforeSendPropertyToClient(this.instance.constructor, this.instance, propertyKey, value, clientToken);
+      if (finalValue === nothing) {
+        this.storeReference(void 0, propertyKey, clientToken);
+        return;
+      }
+      this.storeReference(finalValue, propertyKey, clientToken);
+      const transformedValue = this.serializeValue(finalValue, clientToken);
+      data[propertyKey] = transformedValue;
+    });
+    const createMessage = {
+      type: "create",
+      objectId: this.objectId,
+      typeId,
+      data
+    };
+    return createMessage;
+  }
+  generateChangeMessage(clientToken) {
+    const data = {};
+    let hasDataToSend = false;
+    this._properties.forEach((propertyValueInfo, propertyKey) => {
+      if (!propertyValueInfo.hasPendingChanges)
+        return;
+      const value = propertyValueInfo.value;
+      const finalValue = beforeSendPropertyToClient(this.instance.constructor, this.instance, propertyKey, value, clientToken);
+      if (finalValue === nothing) {
+        this.storeReference(void 0, propertyKey, clientToken);
+        return;
+      }
+      this.storeReference(finalValue, propertyKey, clientToken);
+      const transformedValue = this.serializeValue(finalValue, clientToken);
+      data[propertyKey] = transformedValue;
+      hasDataToSend = true;
+    });
+    if (!hasDataToSend)
+      return null;
+    const changeMessage = {
+      type: "change",
+      objectId: this.objectId,
+      data
+    };
+    return changeMessage;
+  }
+  generateMessages(clientToken, isNewClientConnection) {
+    const result = [];
+    if (isNewClientConnection || this.hasPendingChanges) {
+      let typeId = this.getTypeId(clientToken);
+      if (typeId === null) {
+        return result;
+      }
+      if (isNewClientConnection)
+        result.push(this.generateCreateMessage(typeId, clientToken));
+      else {
+        const changeMessage = this.generateChangeMessage(clientToken);
+        if (changeMessage)
+          result.push(changeMessage);
+      }
+    }
+    this.generateExecuteMessages(clientToken, result);
+    this.generateExecuteResultMessages(clientToken, result);
+    return result;
+  }
+  generateExecuteResultMessages(clientToken, result) {
+    const methodInvokeResults = this._methodInvokeResultsByClient.get(clientToken);
+    if (methodInvokeResults) {
+      this._methodInvokeResultsByClient.delete(clientToken);
+      for (const methodInvokeResult of methodInvokeResults ?? []) {
+        const executeFinishedMessage = {
+          type: "executeFinished",
+          objectId: methodInvokeResult.objectId,
+          invokeId: methodInvokeResult.invokeId
+        };
+        if ("result" in methodInvokeResult) {
+          this.createTemporaryReference(methodInvokeResult.result, clientToken);
+          executeFinishedMessage.result = this.serializeValue(methodInvokeResult.result, clientToken);
+        }
+        if ("error" in methodInvokeResult) {
+          this.createTemporaryReference(methodInvokeResult.error, clientToken);
+          executeFinishedMessage.error = this.serializeValue(methodInvokeResult.error, clientToken);
+        }
+        result.push(executeFinishedMessage);
+      }
+    }
+  }
+  generateExecuteMessages(clientToken, result) {
+    for (const pendingInvokeMethodInfos of this._pendingInvokeMethodInfosById.values()) {
+      const clientInvokeInfo = pendingInvokeMethodInfos.invokeMethodInfoByClient.get(clientToken);
+      if (!clientInvokeInfo || clientInvokeInfo.sentToClient)
+        continue;
+      clientInvokeInfo.sentToClient = true;
+      const args = pendingInvokeMethodInfos.parameters.slice();
+      if (beforeExecuteOnClient(this.instance.constructor, this.instance, pendingInvokeMethodInfos.methodName, args, clientToken) === false) {
+        clientInvokeInfo.reject("Not allowed to invoke method.");
+        continue;
+      }
+      const parameters = args.map((arg) => {
+        this.createTemporaryReference(arg, clientToken);
+        const transformedValue = this.serializeValue(arg, clientToken);
+        return transformedValue;
+      });
+      const executeMessage = {
+        id: pendingInvokeMethodInfos.id,
+        type: "execute",
+        objectId: this.objectId,
+        method: pendingInvokeMethodInfos.methodName,
+        parameters
+      };
+      result.push(executeMessage);
+    }
+  }
+  getTypeId(clientToken) {
+    const typeIdOrNothing = beforeSendObjectToClient(this.type, this.instance, this.typeId, clientToken);
+    if (typeIdOrNothing === nothing)
+      return null;
+    return typeIdOrNothing;
+  }
+  reportPropertyChanged(propertyInfo, key, value) {
+    if (!this.checkCanTrackPropertyInfo(propertyInfo, this.instance, key))
+      return;
+    let current = this._properties.get(key);
+    if (!current) {
+      current = {
+        hasPendingChanges: true,
+        value: void 0,
+        propertyInfo,
+        isBeeingApplied: false
+      };
+      this._properties.set(key, current);
+      this.hasPendingChanges = true;
+    }
+    if (current.value === value)
+      return;
+    this.clearAllStoredReferencesWithKey(key);
+    current.value = value;
+    if (current.isBeeingApplied)
+      return;
+    current.hasPendingChanges = true;
+    this.hasPendingChanges = true;
+  }
+  clearStates(clientToken) {
+    super.clearStates(clientToken);
+    if (clientToken) {
+      this._methodInvokeResultsByClient.delete(clientToken);
+      const tempRefs = this._temporaryReferencesByClient.get(clientToken);
+      if (tempRefs) {
+        for (const storedReference of tempRefs) {
+          storedReference.dispose();
+        }
+        this._temporaryReferencesByClient.delete(clientToken);
+      }
+    } else {
+      this._properties.forEach((property) => {
+        property.hasPendingChanges = false;
+      });
+    }
+  }
+  checkCanTrackPropertyInfo(propertyInfo, instance, propertyKey) {
+    if (!propertyInfo) {
+      return false;
+    }
+    if (propertyInfo.canTrack?.call(instance, { instance, key: propertyKey }) === false) {
+      return false;
+    }
+    return true;
+  }
+  get dispatcher() {
+    return this._dispatcher ?? (this._dispatcher = this.createDispatcher());
+  }
+  createDispatcher() {
+    const result = {
+      invoke: (clientOrClientsOrMethodName, ...args) => {
+        if (typeof clientOrClientsOrMethodName === "string") {
+          const methodName = clientOrClientsOrMethodName;
+          return this.invokeMethodForClients(void 0, methodName, ...args);
+        } else {
+          const clientOrClients = clientOrClientsOrMethodName;
+          const methodName = args.shift();
+          const result2 = this.invokeMethodForClients(clientOrClients, methodName, ...args);
+          if (isIterable(clientOrClients)) {
+            return result2;
+          } else {
+            const client = clientOrClients;
+            return result2.get(client);
+          }
+        }
+      }
+    };
+    return result;
+  }
+  invokeMethodForClients(clientOrClients, methodName, ...parameters) {
+    const clients = clientOrClients ?? this._objectInfo.owner.registeredClientTokens;
+    const methodInfo = this._typeInfo.trackedMethods.get(methodName);
+    const resultByClient = /* @__PURE__ */ new Map();
+    if (!this.checkCanTrackPropertyInfo(methodInfo, this.instance, methodName)) {
+      forEachIterable(clients, (c) => {
+        resultByClient.set(c, Promise.reject(new Error(`Not allowed to invoke method ${methodName} on object ${this.objectId}.`)));
+      });
+      return resultByClient;
+    }
+    const id = this._nextInvokeId++;
+    const promiseDataByClient = /* @__PURE__ */ new Map();
+    const invokeMethodInfo = {
+      id,
+      methodName,
+      parameters,
+      invokeMethodInfoByClient: promiseDataByClient
+    };
+    forEachIterable(clients, (clientToken) => {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => {
+        resolve = (data) => {
+          res(this.deserializeValue(data, clientToken));
+        };
+        reject = (data) => {
+          rej(this.deserializeValue(data, clientToken));
+        };
+      });
+      promise.finally(() => {
+        invokeMethodInfo.invokeMethodInfoByClient.delete(clientToken);
+        if (invokeMethodInfo.invokeMethodInfoByClient.size === 0) {
+          this._pendingInvokeMethodInfosById.delete(id);
+        }
+      });
+      resultByClient.set(clientToken, promise);
+      promiseDataByClient.set(clientToken, {
+        resolve,
+        reject,
+        sentToClient: false
+      });
+    });
+    this._pendingInvokeMethodInfosById.set(invokeMethodInfo.id, invokeMethodInfo);
+    this.reportPendingMessages();
+    return resultByClient;
+  }
+};
+
+// build/serialization/serializers/syncObject/typedSerializer.js
+var serializersByType = /* @__PURE__ */ new Map();
+function getSyncObjectSerializer(type) {
+  if (serializersByType.has(type)) {
+    return serializersByType.get(type);
+  }
+  const typeId = getTrackableTypeInfo(type).typeId;
+  const TypedSyncObjectSerializer = class TypedSyncObjectSerializer extends SyncObjectSerializer {
+    static canSerialize(instanceOrTypeId) {
+      if (typeof instanceOrTypeId === "string") {
+        return instanceOrTypeId === typeId;
+      }
+      return instanceOrTypeId.constructor === type;
+    }
+    get type() {
+      return type;
+    }
+    get typeId() {
+      return typeId;
+    }
+    constructor(objectInfo) {
+      super(objectInfo);
+    }
+  };
+  serializersByType.set(type, TypedSyncObjectSerializer);
+  return TypedSyncObjectSerializer;
+}
+
+// build/objectSync/objectReference.js
+var ObjectReference = class _ObjectReference {
+  constructor(objectId, typeId) {
+    __publicField(this, "objectId");
+    __publicField(this, "typeId");
+    this.objectId = objectId;
+    this.typeId = typeId;
+  }
+  static from(objectInfo, clientToken) {
+    const typeId = objectInfo.serializer.getTypeId(clientToken);
+    if (typeId === void 0 || typeId === null) {
+      return void 0;
+    }
+    return new _ObjectReference(objectInfo.objectId, typeId);
+  }
+};
+
+// build/objectSync/primitiveValue.js
+var PrimitiveValue = class {
+  constructor(value) {
+    __publicField(this, "value");
+    this.value = value;
+  }
+};
+
+// build/objectSync/objectSync.js
+var ObjectSync = class {
+  constructor(settings) {
+    __publicField(this, "_objectPool", new ObjectPool());
+    __publicField(this, "_objectsWithPendingMessages", /* @__PURE__ */ new Set());
+    __publicField(this, "_clients", /* @__PURE__ */ new Set());
     __publicField(this, "_settings");
+    __publicField(this, "_nextObjectId", 1);
+    __publicField(this, "_pendingCreateMessageByObjectId", /* @__PURE__ */ new Map());
+    __publicField(this, "_ownClientConnection");
     this._settings = {
       identity: settings.identity,
-      objectIdPrefix: settings.objectIdPrefix
+      serializers: (settings.serializers ?? Array.from(allSyncObjectTypes)).map((ctor) => {
+        if ("canSerialize" in ctor)
+          return ctor;
+        return getSyncObjectSerializer(ctor);
+      }),
+      intrinsicSerializers: settings.intrinsicSerializers ?? defaultIntrinsicSerializers,
+      objectIdGeneratorSettings: settings.objectIdGeneratorSettings ?? {
+        prefix: settings.identity
+      },
+      arrayChangeSetMode: settings.arrayChangeSetMode ?? "compareStates"
     };
-    this._trackedObjectPool = settings.objectPool;
-    settings.typeSerializers.forEach((gen, typeId) => {
-      const serializer = gen;
-      serializer.typeId = serializer.typeId ?? typeId;
-      this.registerSerializer(serializer);
-    });
-    this._nativeTypeSerializers = settings.nativeTypeSerializers;
+    this._ownClientConnection = this.registerClient({ identity: settings.identity });
   }
-  get settings() {
-    return this._settings;
+  get arrayChangeSetMode() {
+    return this._settings.arrayChangeSetMode;
   }
-  registerSerializer(serializer) {
-    if (this._serializers.has(serializer.type)) {
-      throw new Error(`Serializer for typeId ${serializer.typeId} is already registered`);
+  reportPendingMessagesForObject(objectInfo) {
+    if (!objectInfo.instance)
+      return;
+    this._objectsWithPendingMessages.add(objectInfo.instance);
+  }
+  generateObjectId(value) {
+    if ("generateId" in this._settings.objectIdGeneratorSettings) {
+      return this._settings.objectIdGeneratorSettings.generateId(value);
+    } else {
+      return `${this._settings.objectIdGeneratorSettings.prefix}-${this._nextObjectId++}`;
     }
-    this._serializers.set(serializer.type, serializer);
-  }
-  get identity() {
-    return this._settings.identity;
-  }
-  get allTrackedObjects() {
-    return this._trackedObjectPool.all;
   }
   registerClient(settings) {
     const clientToken = JSON.parse(JSON.stringify(settings));
     this._clients.add(clientToken);
     return clientToken;
   }
-  removeClient(client) {
-    if (!this._clients.has(client)) {
+  get registeredClientTokens() {
+    return Array.from(this._clients).filter((c) => c !== this._ownClientConnection);
+  }
+  removeClient(clientToken) {
+    if (!this._clients.has(clientToken)) {
       throw new Error("Unknown client token");
     }
-    this._trackedObjectPool.all.forEach((obj) => {
-      const hostObjectInfo = getTrackerObjectInfo(obj);
-      hostObjectInfo.onClientRemoved(client);
+    this._objectPool.infos.forEach((info) => {
+      info.serializer.onClientConnectionRemoved(clientToken);
     });
-    this._clients.delete(client);
-  }
-  setClientRestriction(obj, filter) {
-    const tracked = getTrackerObjectInfo(obj);
-    if (!tracked)
-      throw new Error("Object is not tracked");
-    tracked.setClientRestriction(filter);
-  }
-  track(target, trackSettings) {
-    this.trackInternal(target, trackSettings);
-  }
-  trackInternal(target, trackSettings) {
-    if (!target)
-      return null;
-    const isRoot = trackSettings?.isRoot !== false;
-    let hostObjectInfo = getTrackerObjectInfo(target);
-    if (!hostObjectInfo) {
-      const creationSettings = {
-        objectId: trackSettings?.objectId,
-        isRoot,
-        object: target,
-        objectIdPrefix: this._settings.objectIdPrefix,
-        owner: this
-      };
-      hostObjectInfo = getTrackerObjectInfo(target) ?? ChangeTrackerObjectInfo.create(creationSettings);
-      if (!hostObjectInfo)
-        return null;
-      if (!this._trackedObjectPool.has(target))
-        this._trackedObjectPool.add(target);
-      if (trackSettings?.clientVisibility) {
-        this.setClientRestriction(target, trackSettings.clientVisibility);
-      }
-    } else {
-      if (!this._trackedObjectPool.has(target))
-        this._trackedObjectPool.add(target);
-    }
-    if (trackSettings?.knownClients) {
-      const clients = hostObjectInfo.clients;
-      if (clients) {
-        forEachIterable(trackSettings.knownClients, (client) => {
-          clients.add(client);
-        });
-      }
-    }
-    return hostObjectInfo;
-  }
-  untrack(target) {
-    this.untrackInternal(target, true);
-  }
-  untrackInternal(target, throwWhenNotTracked) {
-    const hostObjectInfo = getTrackerObjectInfo(target);
-    if (!this._trackedObjectPool.has(target) || !hostObjectInfo) {
-      if (throwWhenNotTracked) {
-        throw new Error("Object is not tracked");
-      }
-      return false;
-    }
-    hostObjectInfo.isRootObject = false;
-    return true;
-  }
-  getMessages(clientOrClients) {
-    clientOrClients ?? (clientOrClients = this._clients);
-    const result = /* @__PURE__ */ new Map();
-    forEachIterable(clientOrClients, (client) => {
-      const initialTrackedObjects = this._trackedObjectPool.allMetaInfos.filter((o) => o.trackerInfo?.isRootObject).map((o) => o.object);
-      const allTrackedObjectsForClient = this._trackedObjectPool.allMetaInfos.filter((o) => o.trackerInfo?.clients.has(client)).map((o) => o.object);
-      const objectsToVisit = /* @__PURE__ */ new Set([...initialTrackedObjects]);
-      let messages = [];
-      for (const obj of objectsToVisit) {
-        this.gatherMessagesForObjectGraph({
-          object: obj,
-          client,
-          objectsToVisit,
-          messages
-        });
-      }
-      const noLongerTrackedByClient = allTrackedObjectsForClient.filter((o) => {
-        if (objectsToVisit.has(o))
-          return false;
-        return true;
-      });
-      for (const obj of noLongerTrackedByClient) {
-        const hostObjectInfo = getTrackerObjectInfo(obj);
-        if (!hostObjectInfo)
-          continue;
-        hostObjectInfo.onClientRemoved(client);
-        messages.push(hostObjectInfo.getDeleteMessage());
-      }
-      result.set(client, messages);
-    });
-    return result;
-  }
-  gatherMessagesForObjectGraph(args) {
-    const hostObjectInfo = getTrackerObjectInfo(args.object);
-    if (!hostObjectInfo)
-      return;
-    if (!hostObjectInfo?.isForClient(args.client))
-      return;
-    const isKnownToClient = hostObjectInfo.clients.has(args.client);
-    const subMessages = [];
-    if (!isKnownToClient) {
-      const createMessage = hostObjectInfo.getCreateMessage(args.client);
-      if (createMessage !== null) {
-        hostObjectInfo.clients.add(args.client);
-        subMessages.push(createMessage);
-      }
-    } else {
-      const updateMessage = hostObjectInfo.getChangeMessage(args.client);
-      if (updateMessage !== null) {
-        subMessages.push(updateMessage);
-      }
-    }
-    const executeMessages = hostObjectInfo.getExecuteMessages(args.client);
-    subMessages.push(...executeMessages);
-    args.messages.push(...subMessages);
-    for (const message of subMessages) {
-      this.gatherSubTrackablesForGraphFromMessage(message, args);
-    }
-  }
-  gatherSubTrackablesForGraphFromMessage(message, args) {
-    let valuesToScan = [];
-    if (message.type === "create" || message.type === "change") {
-      const properties = message.properties;
-      Object.values(properties).map((propertyInfo) => {
-        if (propertyInfo)
-          valuesToScan.push(propertyInfo);
-      });
-    } else if (message.type === "execute") {
-      const parameters = message.parameters;
-      Object.values(parameters).map((parameterInfo) => {
-        if (parameterInfo)
-          valuesToScan.push(parameterInfo);
-      });
-    }
-    for (const propertyInfo of valuesToScan) {
-      this.gatherSubTrackablesForGraphFromValue(propertyInfo, args);
-      if (propertyInfo.objectId && propertyInfo.value) {
-        args.objectsToVisit.add(propertyInfo.value);
-        delete propertyInfo.value;
-      }
-    }
-  }
-  gatherSubTrackablesForGraphFromValue(data, args, visitedValues = /* @__PURE__ */ new Set()) {
-    if (data === void 0 || data === null || typeof data !== "object" || visitedValues.has(data))
-      return;
-    visitedValues.add(data);
-    if (isPropertyInfo(data)) {
-      const isTrackable = data.objectId && data.value !== void 0;
-      const isUntrackableObjectOrArray = !isTrackable && data.value && typeof data.value === "object";
-      if (isTrackable) {
-        this.trackInternal(data.value, { isRoot: false });
-        args.objectsToVisit.add(data.value);
-        delete data.value;
-      } else if (isUntrackableObjectOrArray) {
-        this.gatherSubTrackablesForGraphFromValue(data.value, args, visitedValues);
-      }
-    } else if (Array.isArray(data)) {
-      data.forEach((value) => {
-        if (!value || typeof value !== "object")
-          return;
-        this.gatherSubTrackablesForGraphFromValue(value, args, visitedValues);
-      });
-    } else {
-      Object.keys(data).forEach((key) => {
-        const value = data[key];
-        if (!value || typeof value !== "object")
-          return;
-        this.gatherSubTrackablesForGraphFromValue(value, args, visitedValues);
-      });
-    }
-  }
-  applyClientMethodInvokeResults(client, methodExecuteResults) {
-    for (const result of methodExecuteResults) {
-      const tracked = this._trackedObjectPool.get(result.objectId);
-      if (!tracked)
-        continue;
-      const hostObjectInfo = getTrackerObjectInfo(tracked);
-      hostObjectInfo?.onClientMethodExecuteResultReceived(result, client);
-    }
-  }
-  tick() {
-    this._trackedObjectPool.allMetaInfos.forEach((meta) => {
-      const hostObjectInfo = meta.trackerInfo;
-      if (!hostObjectInfo)
-        return;
-      if (!hostObjectInfo.isRootObject && hostObjectInfo.clients.size === 0) {
-        meta.trackerInfo?.onClientRemoved;
-        this._trackedObjectPool.deleteById(meta.objectId);
-        return;
-      }
-      hostObjectInfo.tick();
-    });
-  }
-  serializeValue(value, trackerInfo) {
-    let serializer = this._serializers.get(value.constructor) ?? this._nativeTypeSerializers.find((g) => value instanceof g.type);
-    if (!serializer) {
-      return null;
-    }
-    return {
-      value: serializer.serialize ? serializer.serialize(value, trackerInfo) : "toJSON" in value && typeof value.toJSON === "function" ? value.toJSON() : "toValue" in value && typeof value.toValue === "function" ? value.toValue() : value,
-      typeId: serializer.typeId
-    };
-  }
-};
-
-// build/shared/nativeTypeGenerators.js
-var nativeArraySerializer = {
-  type: Array,
-  typeId: "<NativeArray>",
-  serialize(instance, trackerInfo) {
-    return mapIterable(instance, (value) => {
-      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
-      return propertyInfo;
-    });
-  },
-  deserialize(value, applicator, clientConnection) {
-    return value.map((item) => {
-      return applicator.getPropertyValue(item, clientConnection);
-    });
-  }
-};
-var nativeMapSerializer = {
-  type: Map,
-  typeId: "<NativeMap>",
-  serialize(instance, trackerInfo) {
-    const result = {};
-    for (const [key, value] of instance.entries()) {
-      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
-      result[key] = propertyInfo;
-    }
-    return result;
-  },
-  deserialize(value, applicator, clientConnection) {
-    const result = /* @__PURE__ */ new Map();
-    for (const [key, item] of Object.entries(value)) {
-      result.set(key, applicator.getPropertyValue(item, clientConnection));
-    }
-    return result;
-  }
-};
-var nativeSetSerializer = {
-  type: Set,
-  typeId: "<NativeSet>",
-  serialize(instance, trackerInfo) {
-    const result = [];
-    for (const value of instance.values()) {
-      const propertyInfo = trackerInfo.serializePropertyInfo(trackerInfo.createPropertyInfo(value));
-      result.push(propertyInfo);
-    }
-    return result;
-  },
-  deserialize(value, applicator, clientConnection) {
-    const result = /* @__PURE__ */ new Set();
-    for (const item of value) {
-      result.add(applicator.getPropertyValue(item, clientConnection));
-    }
-    return result;
-  }
-};
-var nativeObjectSerializer = {
-  type: Object,
-  typeId: "<NativeObject>",
-  serialize(instance, trackerInfo) {
-    const result = {};
-    for (const [key, value] of Object.entries(instance)) {
-      const propertyInfo = trackerInfo.createPropertyInfo(value);
-      result[key] = propertyInfo;
-    }
-    return result;
-  },
-  deserialize(value, applicator, clientConnection) {
-    const result = {};
-    for (const [key, item] of Object.entries(value)) {
-      result[key] = applicator.getPropertyValue(item, clientConnection);
-    }
-    return result;
-  }
-};
-var nativeTypeSerializers = [nativeSetSerializer, nativeMapSerializer, nativeArraySerializer, nativeObjectSerializer];
-
-// build/objectSync/objectSync.js
-var ObjectSync = class {
-  constructor(settings) {
-    __publicField(this, "_tracker");
-    __publicField(this, "_applicator");
-    __publicField(this, "_settings");
-    __publicField(this, "_objectPool");
-    this._settings = {
-      identity: settings.identity,
-      objectIdPrefix: settings.objectIdPrefix ?? `${settings.identity}-${Date.now()}-`,
-      typeGenerators: /* @__PURE__ */ new Map(),
-      typeSerializers: /* @__PURE__ */ new Map(),
-      nativeTypeSerializers: settings.nativeTypeSerializers ?? nativeTypeSerializers
-    };
-    if (Array.isArray(settings.typeGenerators)) {
-      for (const constructor of settings.typeGenerators) {
-        const trackableTypeInfo = getTrackableTypeInfo(constructor);
-        this._settings.typeGenerators.set(trackableTypeInfo?.typeId ?? constructor.name, constructor);
-      }
-    } else if (settings.typeGenerators)
-      this._settings.typeGenerators = settings.typeGenerators;
-    else
-      this._settings.typeGenerators = new Map(allTypeGenerators);
-    if (Array.isArray(settings.typeSerializers)) {
-      for (const serializer of settings.typeSerializers) {
-        this._settings.typeSerializers.set(serializer.typeId ?? serializer.type.name, serializer);
-      }
-    } else if (settings.typeSerializers)
-      this._settings.typeSerializers = settings.typeSerializers;
-    this._objectPool = new TrackedObjectPool();
-    this._tracker = new ObjectChangeTracker({
-      objectPool: this._objectPool,
-      ...this._settings
-    });
-    this._applicator = new ObjectChangeApplicator({
-      objectPool: this._objectPool,
-      ...this._settings
-    });
-  }
-  getMessages(clientOrClientsOrCallTick, callTick = true) {
-    let result;
-    let clients;
-    if (typeof clientOrClientsOrCallTick === "boolean" || clientOrClientsOrCallTick === void 0) {
-      clients = void 0;
-      callTick = clientOrClientsOrCallTick ?? true;
-    } else if (!isIterable(clientOrClientsOrCallTick)) {
-      clients = clientOrClientsOrCallTick;
-    }
-    result = this._tracker.getMessages(clients);
-    if (callTick)
-      this._tracker.tick();
-    if (clients === void 0 || isIterable(clients))
-      return result;
-    return result.get(clients);
-  }
-  tick() {
-    this._tracker.tick();
-  }
-  applyAsync(messages, clientConnection) {
-    return this._applicator.applyAsync(messages, clientConnection);
-  }
-  applyClientMethodInvokeResults(resultsByClient) {
-    for (const [clientToken, results] of resultsByClient) {
-      this.applyClientMethodInvokeResultsFromClient(clientToken, results);
-    }
-  }
-  applyClientMethodInvokeResultsFromClient(clientConnection, results) {
-    this._tracker.applyClientMethodInvokeResults(clientConnection, results);
-  }
-  async applyMessagesAsync(messagesByClient) {
-    const resultsByClient = /* @__PURE__ */ new Map();
-    for (const [clientConnection, messages] of messagesByClient) {
-      const methodExecuteResults = await this.applyMessagesFromClientAsync(clientConnection, messages);
-      resultsByClient.set(clientConnection, methodExecuteResults);
-    }
-    return resultsByClient;
-  }
-  async applyMessagesFromClientAsync(clientConnection, messages) {
-    const results = await this._applicator.applyAsync(messages, clientConnection);
-    for (const obj of results.newTrackedObjects) {
-      this._tracker.track(obj, {
-        knownClients: clientConnection
-      });
-    }
-    return results.methodExecuteResults;
-  }
-  async exchangeMessagesAsync(sendToClientAsync, errorHandler) {
-    const messages = this.getMessages();
-    const resultsByClient = /* @__PURE__ */ new Map();
-    const allPromises = [];
-    for (const [clientToken, clientMessages] of messages) {
-      const methodInvokeResults = sendToClientAsync(clientToken, clientMessages);
-      allPromises.push(methodInvokeResults);
-      resultsByClient.set(clientToken, methodInvokeResults);
-    }
-    await Promise.allSettled(allPromises);
-    for (const [clientToken, resultsPromise] of resultsByClient) {
-      try {
-        const results = await resultsPromise;
-        this._tracker.applyClientMethodInvokeResults(clientToken, results);
-      } catch (error) {
-        if (errorHandler) {
-          errorHandler(clientToken, error);
-        }
-      }
-    }
-  }
-  async exchangeMessagesBulkAsync(sendToClientsAsync, errorHandler) {
-    const messages = this.getMessages();
-    const resultsByClient = await sendToClientsAsync(messages);
-    for (const [clientToken, resultsPromise] of resultsByClient) {
-      try {
-        const results = await resultsPromise;
-        this._tracker.applyClientMethodInvokeResults(clientToken, results);
-      } catch (error) {
-        if (errorHandler) {
-          errorHandler(clientToken, error);
-        }
-      }
-    }
-  }
-  registerSerializer(serializer) {
-    this._tracker.registerSerializer(serializer);
+    this._clients.delete(clientToken);
   }
   get identity() {
     return this._settings.identity;
   }
   get allTrackedObjects() {
-    return this._tracker.allTrackedObjects;
-  }
-  registerClient(settings) {
-    return this._tracker.registerClient(settings);
-  }
-  removeClient(client) {
-    this._tracker.removeClient(client);
-  }
-  track(target, trackSettings) {
-    this._tracker.track(target, trackSettings);
-  }
-  untrack(target) {
-    this._tracker.untrack(target);
+    return this._objectPool.objects;
   }
   setClientRestriction(obj, filter) {
-    this._tracker.setClientRestriction(obj, filter);
+    const info = this._objectPool.getInfoByObject(obj);
+    if (!info)
+      throw new Error("Object is not tracked");
+    info.setClientRestriction(filter);
   }
-  registerGenerator(typeId, generator) {
-    this._applicator.registerGenerator(typeId, generator);
-  }
-  findObjectOfType(constructor, objectId) {
-    return this._applicator.findObjectOfType(constructor, objectId);
-  }
-  findObjectsOfType(constructor) {
-    return this._applicator.findObjectsOfType(constructor);
-  }
-  getInvokeProxy(target) {
-    if (!this._objectPool.has(target)) {
-      this._tracker.track(target, { isRoot: false });
+  track(instance, objectId) {
+    const info = this.trackInternal(instance, objectId);
+    if (!info) {
+      throw new Error("Cannot track primitive value as root.");
     }
-    const meta = getTrackerObjectInfo(target);
-    if (!meta) {
-      throw new Error("Target object is not tracked and cannot be proxied.");
-    }
-    return meta.invokeProxy;
+    info.isRoot = true;
+    info.serializer.clients.add(this._ownClientConnection);
   }
-  invoke(target, method, ...args) {
-    if (!this._objectPool.has(target)) {
-      this._tracker.track(target, { isRoot: false });
+  trackInternal(instance, objectId) {
+    if (isPrimitiveValue(instance))
+      return null;
+    let info = this._objectPool.getInfoByObject(instance);
+    if (info) {
+      return info;
     }
-    const meta = getTrackerObjectInfo(target);
-    if (!meta) {
-      throw new Error("Target object is not tracked and cannot be proxied.");
+    if (objectId !== void 0) {
+      info = this._objectPool.getInfoById(objectId);
+      if (info) {
+        this._objectPool.onObjectSet(info);
+        return info;
+      }
     }
-    return meta.invoke(method, ...args);
+    info = new ObjectInfo(this, objectId, instance);
+    info.isOwned = true;
+    this._objectPool.add(info);
+    info.initializeSerializer(instance);
+    return info;
+  }
+  untrack(instance) {
+    const info = this._objectPool.getInfoByObject(instance);
+    if (!info || !info.isRoot)
+      return false;
+    info.isRoot = false;
+    return true;
+  }
+  reportInstanceCreated(instance, objectId) {
+    this.trackInternal(instance, objectId);
+  }
+  findSerializer(instanceOrTypeId) {
+    const serializer = this._settings.serializers.find((s) => s.canSerialize(instanceOrTypeId)) ?? this._settings.intrinsicSerializers.find((s) => s.canSerialize(instanceOrTypeId));
+    if (!serializer)
+      throw new Error(`No serializer found for value of type ${typeof instanceOrTypeId === "string" ? instanceOrTypeId : instanceOrTypeId.constructor.name}`);
+    return serializer;
+  }
+  handleCreateMessage(message, clientToken) {
+    this._pendingCreateMessageByObjectId.delete(message.objectId);
+    const info = new ObjectInfo(this, message.objectId, message.typeId);
+    this._objectPool.add(info);
+    info.initializeSerializer(message.typeId);
+    info.serializer.clients.add(clientToken);
+    info.serializer.applyMessage(message, clientToken);
+  }
+  async handleOtherMessage(message, clientToken) {
+    const info = this._objectPool.getInfoById(message.objectId);
+    if (!info)
+      return;
+    await info.serializer.applyMessage(message, clientToken);
+  }
+  async handleDeleteMessage(message, clientToken) {
+    const info = this._objectPool.getInfoById(message.objectId);
+    if (!info)
+      return;
+    await info.serializer.applyMessage(message, clientToken);
+    this._objectPool.deleteById(message.objectId);
+  }
+  serializeValue(value, clientToken) {
+    if (isPrimitiveValue(value)) {
+      return new PrimitiveValue(value);
+    }
+    return ObjectReference.from(this.trackInternal(value), clientToken);
+  }
+  deserializeValue(value, clientToken) {
+    if (value === void 0)
+      return void 0;
+    if (!("objectId" in value)) {
+      return value.value;
+    }
+    const objectId = value.objectId;
+    let instance = this._objectPool.getObjectById(objectId);
+    if (instance)
+      return instance;
+    const createMessage = this._pendingCreateMessageByObjectId.get(objectId);
+    if (!createMessage)
+      throw new Error(`Object with id ${objectId} not found`);
+    this.handleCreateMessage(createMessage, clientToken);
+    instance = this._objectPool.getObjectById(objectId);
+    if (!instance)
+      throw new Error(`Object with id ${objectId} not found after processing create message`);
+    return instance;
+  }
+  async applyMessagesAsync(messagesOrMessagesByClient, clientToken) {
+    if (messagesOrMessagesByClient instanceof Map) {
+      for (const [clientToken2, messages2] of messagesOrMessagesByClient) {
+        await this.applyMessagesAsync(messages2, clientToken2);
+      }
+      return;
+    }
+    let messages = messagesOrMessagesByClient;
+    if (this._clients.has(clientToken) === false) {
+      throw new Error("Unknown client token received messages from.");
+    }
+    messages.sort((a, b) => {
+      if (a.type === b.type)
+        return 0;
+      if (a.type === "create")
+        return -1;
+      if (b.type === "create")
+        return 1;
+      if (a.type === "change")
+        return -1;
+      if (b.type === "change")
+        return 1;
+      if (a.type === "execute")
+        return -1;
+      if (b.type === "execute")
+        return 1;
+      if (a.type === "delete")
+        return 1;
+      if (b.type === "delete")
+        return -1;
+      return 0;
+    });
+    const creationMessages = messages.filter(isCreateObjectMessage);
+    messages = messages.filter((m) => !isCreateObjectMessage(m));
+    for (const creationMessage of creationMessages) {
+      this._pendingCreateMessageByObjectId.set(creationMessage.objectId, creationMessage);
+    }
+    while (this._pendingCreateMessageByObjectId.size > 0) {
+      const creationMessage = this._pendingCreateMessageByObjectId.values().next().value;
+      this.handleCreateMessage(creationMessage, clientToken);
+    }
+    for (const message of messages) {
+      if (isDeleteObjectMessage(message))
+        await this.handleDeleteMessage(message, clientToken);
+      else
+        await this.handleOtherMessage(message, clientToken);
+    }
+  }
+  clearStates() {
+    this._objectPool.infos.forEach((info) => {
+      info.serializer.clearStates();
+    });
+    this._objectsWithPendingMessages.clear();
+    this._objectPool.orphanedObjectInfos(this._ownClientConnection).forEach((info) => {
+      this._objectPool.deleteByObject(info.instance);
+    });
+  }
+  getMessages(clientOrClientsOrCallTick, clearNonClientStates = true) {
+    let result;
+    let clientTokens;
+    if (typeof clientOrClientsOrCallTick === "boolean" || clientOrClientsOrCallTick === void 0) {
+      clientTokens = void 0;
+      clearNonClientStates = clientOrClientsOrCallTick ?? true;
+    } else if (!isIterable(clientOrClientsOrCallTick)) {
+      clientTokens = clientOrClientsOrCallTick;
+    }
+    result = this.getMessagesForClients(clientTokens ?? this._clients, clearNonClientStates);
+    if (clientTokens === void 0 || isIterable(clientTokens))
+      return result;
+    return result.get(clientTokens);
+  }
+  getMessagesForClients(clientOrClientTokens, clearNonClientStates) {
+    const resultByClient = /* @__PURE__ */ new Map();
+    forEachIterable(clientOrClientTokens, (clientToken) => {
+      if (clientToken === this._ownClientConnection)
+        return;
+      const generatedMessages = [];
+      const serializersWhichsStatesNeedsToBeCleared = /* @__PURE__ */ new Set();
+      for (const instance of this._objectsWithPendingMessages) {
+        const objectInfo = this.trackInternal(instance);
+        if (!objectInfo.isForClientToken(clientToken))
+          continue;
+        serializersWhichsStatesNeedsToBeCleared.add(objectInfo.serializer);
+        const isNewInstance = objectInfo.serializer.clients.has(clientToken) === false;
+        if (isNewInstance) {
+          objectInfo.serializer.clients.add(clientToken);
+        }
+        const messages = objectInfo.serializer.generateMessages(clientToken, isNewInstance);
+        generatedMessages.push(...messages);
+      }
+      for (const serializer of serializersWhichsStatesNeedsToBeCleared) {
+        serializer.clearStates(clientToken);
+      }
+      while (true) {
+        const noLongerTrackedByClient = this._objectPool.objectInfosToDelete(clientToken);
+        if (noLongerTrackedByClient.length === 0) {
+          break;
+        }
+        for (const objectInfo of noLongerTrackedByClient) {
+          objectInfo.serializer.onClientConnectionRemoved(clientToken);
+          generatedMessages.push({
+            type: "delete",
+            objectId: objectInfo.objectId
+          });
+        }
+      }
+      resultByClient.set(clientToken, generatedMessages);
+    });
+    if (clearNonClientStates)
+      this.clearStates();
+    return resultByClient;
+  }
+  findOne(constructorOrObjectId, objectId) {
+    if (typeof constructorOrObjectId === "string") {
+      return this._objectPool.getObjectById(constructorOrObjectId);
+    }
+    return this._objectPool.findOne(constructorOrObjectId, objectId);
+  }
+  findAll(constructor) {
+    return this._objectPool.findAll(constructor);
+  }
+  async exchangeMessagesAsync(settings) {
+    const messages = settings.clients ? this.getMessages(settings.clients) : this.getMessages();
+    if (settings.clientMessageFilter) {
+      for (const [clientToken, clientMessages] of messages) {
+        const filteredMessages = clientMessages.filter((message) => settings.clientMessageFilter(clientToken, message, false));
+        messages.set(clientToken, filteredMessages);
+      }
+    }
+    let responseMessagesByClient;
+    if ("sendToClientAsync" in settings) {
+      responseMessagesByClient = /* @__PURE__ */ new Map();
+      for (const [clientToken, clientMessages] of messages) {
+        const responseMessagesFromClient = settings.sendToClientAsync(clientToken, clientMessages);
+        responseMessagesByClient.set(clientToken, responseMessagesFromClient);
+      }
+      await Promise.allSettled(responseMessagesByClient.values());
+    } else {
+      responseMessagesByClient = await settings.sendToClientsAsync(messages);
+    }
+    for (const [clientToken, resultsPromise] of responseMessagesByClient) {
+      try {
+        let messagesFromClient = await resultsPromise;
+        if (settings.clientMessageFilter) {
+          messagesFromClient = messagesFromClient.filter((message) => settings.clientMessageFilter(clientToken, message, true));
+        }
+        await this.applyMessagesAsync(messagesFromClient, clientToken);
+      } catch (error) {
+        settings.errorHandler?.(clientToken, error);
+      }
+    }
+  }
+  getDispatcher(instance) {
+    const info = this._objectPool.getInfoByObject(instance);
+    if (!info)
+      throw new Error("Object is not tracked");
+    const dispatcher = info.serializer.dispatcher;
+    if (!dispatcher) {
+      return null;
+    }
+    return dispatcher;
   }
 };
+
+// build/objectSync/standaloneSerialization.js
+function serializeValue(value, settings) {
+  let isPrimitive = false;
+  if (typeof value !== "object") {
+    value = { value };
+    isPrimitive = true;
+  }
+  const hostSync = new ObjectSync({ ...settings, identity: settings?.identity ?? "host" });
+  hostSync.track(value, isPrimitive ? "value" : "root");
+  const clientToken = hostSync.registerClient({ identity: settings?.clientIdentity ?? "client" });
+  const messages = hostSync.getMessages(clientToken);
+  return JSON.stringify(messages);
+}
+function deserializeValue(data, settings) {
+  const hostSync = new ObjectSync({ ...settings, identity: settings?.clientIdentity ?? "client" });
+  const clientToken = hostSync.registerClient({ identity: settings?.identity ?? "host" });
+  const messages = JSON.parse(data);
+  hostSync.applyMessagesAsync(messages, clientToken);
+  const root = hostSync.findOne("root");
+  if (root)
+    return root;
+  const primitive = hostSync.findOne("value");
+  if (primitive)
+    return primitive.value;
+  throw new Error("Deserialized data does not contain a root or primitive value");
+}
+async function deserializeValueAsync(data, settings) {
+  const hostSync = new ObjectSync({ ...settings, identity: settings?.clientIdentity ?? "client" });
+  const clientToken = hostSync.registerClient({ identity: settings?.identity ?? "host" });
+  const messages = JSON.parse(data);
+  await hostSync.applyMessagesAsync(messages, clientToken);
+  const root = hostSync.findOne("root");
+  if (root)
+    return root;
+  const primitive = hostSync.findOne("value");
+  if (primitive)
+    return primitive.value;
+  throw new Error("Deserialized data does not contain a root or primitive value");
+}
+
+// build/serialization/serializers/syncArray/metaInfo.js
+var SyncArrayMetaInfo = class extends EventEmitter {
+  reportArrayChanged(instance, change) {
+    this.emit("addChange", instance, change);
+  }
+};
+var metaInfoBySyncArray = /* @__PURE__ */ new WeakMap();
+function ensureSyncArrayMetaInfo(instance) {
+  if (!(instance instanceof SyncableArray))
+    return void 0;
+  let metaInfo = getSyncArrayMetaInfo(instance);
+  if (!metaInfo) {
+    metaInfo = new SyncArrayMetaInfo();
+    metaInfoBySyncArray.set(instance, metaInfo);
+  }
+  return metaInfo;
+}
+function getSyncArrayMetaInfo(instance) {
+  return metaInfoBySyncArray.get(instance) ?? null;
+}
+
+// build/serialization/serializers/syncArray/syncArray.js
+var realInstanceSymbol = Symbol("realInstanceSymbol");
+var ignoreSyncSpliceCounterByInstance = /* @__PURE__ */ new Map();
+var SyncableArray = class extends Array {
+  constructor(...initialData) {
+    super(...initialData);
+    const that = this;
+    const proxy = new Proxy(this, {
+      get(target, prop, receiver) {
+        if (prop === realInstanceSymbol) {
+          return that;
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+      set(target, prop, value, receiver) {
+        const isIndexer = (typeof prop === "string" || typeof prop === "number") && !isNaN(Number(prop));
+        if (isIndexer)
+          return that.setAtIndex.call(receiver, Number(prop), value);
+        if (prop === "length") {
+          target.setLength.call(receiver, value);
+          return true;
+        }
+        return Reflect.set(target, prop, value, receiver);
+      }
+    });
+    return proxy;
+  }
+  setLength(value) {
+    if (value >= 0 && !isIgnoringSpliceGathering(this)) {
+      const oldLength = this.length;
+      if (value < oldLength) {
+        const spliceInstruction = {
+          start: value,
+          deletedItems: this.slice(value, oldLength),
+          items: []
+        };
+        this.onSplice(spliceInstruction);
+      } else if (value > oldLength) {
+        const spliceInstruction = {
+          start: oldLength,
+          deletedItems: [],
+          items: new Array(value - oldLength).fill(void 0)
+        };
+        this.onSplice(spliceInstruction);
+      }
+    }
+    withIgnoredSyncSplice(this, () => {
+      super.length = value;
+    });
+  }
+  setAtIndex(index, value) {
+    if (index >= 0 && !isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: index,
+        deletedItems: this.slice(index, index + 1),
+        items: [value]
+      };
+      this.onSplice(spliceInstruction);
+    }
+    withIgnoredSyncSplice(this, () => {
+      super[index] = value;
+    });
+    return true;
+  }
+  splice(start, deleteCount, ...items) {
+    const actualStart = typeof start === "number" ? start : 0;
+    const actualDeleteCount = typeof deleteCount === "number" ? deleteCount : this.length - actualStart;
+    const deletedItems = super.splice(actualStart, actualDeleteCount, ...items);
+    if (!isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: actualStart,
+        deletedItems,
+        items
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return deletedItems;
+  }
+  push(...items) {
+    if (!isIgnoringSpliceGathering(this)) {
+      const start = this.length;
+      const spliceInstruction = {
+        start,
+        deletedItems: [],
+        items
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return withIgnoredSyncSplice(this, () => {
+      return super.push(...items);
+    });
+  }
+  pop() {
+    if (this.length === 0)
+      return void 0;
+    if (!isIgnoringSpliceGathering(this)) {
+      const start = this.length - 1;
+      const spliceInstruction = {
+        start,
+        deletedItems: this.slice(start, start + 1),
+        items: []
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return withIgnoredSyncSplice(this, () => {
+      return super.pop();
+    });
+  }
+  shift() {
+    if (this.length === 0)
+      return void 0;
+    if (!isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: 0,
+        deletedItems: this.slice(0, 1),
+        items: []
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return withIgnoredSyncSplice(this, () => {
+      return super.shift();
+    });
+  }
+  unshift(...items) {
+    if (!isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: 0,
+        deletedItems: [],
+        items
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return withIgnoredSyncSplice(this, () => {
+      return super.unshift(...items);
+    });
+  }
+  reverse() {
+    const result = withIgnoredSyncSplice(this, () => {
+      return super.reverse();
+    });
+    if (!isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: 0,
+        deletedItems: this.slice(0, this.length),
+        items: [...this]
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return result;
+  }
+  sort(compareFn) {
+    const result = withIgnoredSyncSplice(this, () => {
+      return super.sort(compareFn);
+    });
+    if (!isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: 0,
+        deletedItems: this.slice(0, this.length),
+        items: [...this]
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return result;
+  }
+  fill(value, start, end) {
+    const actualStart = start !== void 0 ? start : 0;
+    const actualEnd = end !== void 0 ? end : this.length;
+    const result = withIgnoredSyncSplice(this, () => {
+      return super.fill(value, start, end);
+    });
+    var itemsFromData = this.slice(actualStart, actualEnd);
+    if (!isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: actualStart,
+        deletedItems: this.slice(actualStart, actualEnd),
+        items: itemsFromData
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return result;
+  }
+  copyWithin(target, start, end) {
+    const actualEnd = end !== void 0 ? end : this.length;
+    const result = withIgnoredSyncSplice(this, () => {
+      return super.copyWithin(target, start, end);
+    });
+    var itemsFromData = this.slice(target, target + (actualEnd - start));
+    if (!isIgnoringSpliceGathering(this)) {
+      const spliceInstruction = {
+        start: target,
+        deletedItems: this.slice(target, target + (actualEnd - start)),
+        items: itemsFromData
+      };
+      this.onSplice(spliceInstruction);
+    }
+    return result;
+  }
+  onSplice(spliceInstruction) {
+    getSyncArrayMetaInfo(this)?.reportArrayChanged(this, spliceInstruction);
+  }
+};
+function withIgnoredSyncSplice(instance, action) {
+  const realInstance = instance[realInstanceSymbol] ?? instance;
+  const cnt = ignoreSyncSpliceCounterByInstance.get(realInstance) ?? 0;
+  ignoreSyncSpliceCounterByInstance.set(realInstance, cnt + 1);
+  try {
+    return action();
+  } finally {
+    const cnt2 = ignoreSyncSpliceCounterByInstance.get(realInstance) ?? 1;
+    if (cnt2 <= 1) {
+      ignoreSyncSpliceCounterByInstance.delete(realInstance);
+    } else {
+      ignoreSyncSpliceCounterByInstance.set(realInstance, cnt2 - 1);
+    }
+  }
+}
+function isIgnoringSpliceGathering(instance) {
+  const realInstance = instance[realInstanceSymbol] ?? instance;
+  const cnt = ignoreSyncSpliceCounterByInstance.get(realInstance) ?? 0;
+  return cnt > 0;
+}
+
+// build/serialization/serializers/syncArray/syncObservableArray.js
+var SyncableObservableArray = class extends SyncableArray {
+  constructor() {
+    super(...arguments);
+    __publicField(this, "_eventEmitter", new EventEmitter());
+  }
+  onSplice(spliceInstruction) {
+    super.onSplice(spliceInstruction);
+    if (spliceInstruction.deletedItems.length > 0 && this._eventEmitter.listenerCount("removed") > 0) {
+      this._eventEmitter.emit("removed", spliceInstruction.deletedItems, spliceInstruction.start);
+    }
+    if (spliceInstruction.items.length > 0 && this._eventEmitter.listenerCount("added") > 0) {
+      this._eventEmitter.emit("added", spliceInstruction.items, spliceInstruction.start);
+    }
+  }
+  on(event, callback) {
+    this._eventEmitter.on(event, callback);
+  }
+  once(event, callback) {
+    this._eventEmitter.once(event, callback);
+  }
+  off(event, callback) {
+    this._eventEmitter.off(event, callback);
+  }
+  listenerCount(event, callback) {
+    return this._eventEmitter.listenerCount(event, callback);
+  }
+};
+
+// build/serialization/serializers/syncArray/changeSet.js
+var Span = class _Span {
+  constructor(dataOrSpan, start = 0, length) {
+    __publicField(this, "_data");
+    __publicField(this, "end");
+    __publicField(this, "start");
+    if (dataOrSpan instanceof _Span) {
+      this._data = dataOrSpan._data;
+      this.start = dataOrSpan.start + start;
+      this.end = length !== void 0 ? this.start + length - 1 : dataOrSpan.end;
+    } else {
+      this._data = dataOrSpan;
+      this.start = start;
+      this.end = (length !== void 0 ? this.start + length : dataOrSpan.length) - 1;
+    }
+    if (this.length > this._data.length) {
+      this.end = this._data.length - 1;
+    }
+  }
+  get length() {
+    return this.end - this.start + 1;
+  }
+  get(index) {
+    return this._data[this.start + index];
+  }
+  get data() {
+    return this._data.slice(this.start, this.end + 1);
+  }
+  subSpan(start, length) {
+    return new _Span(this._data, this.start + start, Math.min(length, this.length - start));
+  }
+  dataFromRange(start, length) {
+    return this._data.slice(this.start + start, this.start + start + length);
+  }
+};
+function createChangeSet(before, after, startIndex = 0) {
+  let beforeSpan = new Span(before);
+  let afterSpan = new Span(after);
+  let start = startIndex;
+  if (beforeSpan.length === 0)
+    return [{ start, deleteCount: 0, items: afterSpan.data }];
+  if (afterSpan.length === 0)
+    return [{ start, deleteCount: beforeSpan.length, items: [] }];
+  const preprocessed = preprocessSpans(beforeSpan, afterSpan);
+  if (preprocessed.isIdentical)
+    return [];
+  const results = [];
+  while (true) {
+    const nextMatch = findMatchInIndexMaps(preprocessed.spanAndIndexMap0, preprocessed.spanAndIndexMap1);
+    if (!nextMatch)
+      break;
+    const [indexInBefore, indexInAfter, skipCount] = nextMatch;
+    if (indexInBefore === 0 && indexInAfter === 0) {
+      beforeSpan.start += skipCount;
+      afterSpan.start += skipCount;
+      start += skipCount;
+      continue;
+    }
+    results.push({ start, deleteCount: indexInBefore, items: afterSpan.dataFromRange(0, indexInAfter) });
+    afterSpan.start += indexInAfter + skipCount - 1;
+    beforeSpan.start += indexInBefore + skipCount - 1;
+    start += indexInAfter + skipCount - 1;
+  }
+  if (beforeSpan.length > 0 || afterSpan.length > 0)
+    results.push({ start, deleteCount: beforeSpan.length, items: afterSpan.data });
+  return results;
+}
+function applyChangeSet(array, changeSet) {
+  for (const change of changeSet) {
+    if (change.start > array.length && change.items.length > 0) {
+      array[change.start] = void 0;
+    }
+    array.splice(change.start, change.deleteCount, ...change.items);
+  }
+  return array;
+}
+function preprocessSpans(span0, span1) {
+  const sameLength = span0.length === span1.length;
+  let isIdentical = sameLength;
+  const indexMap0 = /* @__PURE__ */ new Map();
+  const indexMap1 = /* @__PURE__ */ new Map();
+  for (let inSpanIndex = 0; inSpanIndex < span0.length; inSpanIndex++) {
+    const item0 = span0.get(inSpanIndex);
+    storeSpanItemInIndexMap(span0, indexMap0, inSpanIndex, item0);
+    if (sameLength) {
+      var item1 = span1.get(inSpanIndex);
+      storeSpanItemInIndexMap(span1, indexMap1, inSpanIndex, item1);
+      if (isIdentical && item0 !== item1)
+        isIdentical = false;
+    }
+  }
+  if (isIdentical) {
+    return { isIdentical: true };
+  }
+  if (!sameLength) {
+    for (let inSpanIndex = 0; inSpanIndex < span1.length; inSpanIndex++) {
+      const item12 = span1.get(inSpanIndex);
+      storeSpanItemInIndexMap(span1, indexMap1, inSpanIndex, item12);
+    }
+  }
+  return {
+    spanAndIndexMap0: {
+      span: span0,
+      indexMap: indexMap0
+    },
+    spanAndIndexMap1: {
+      span: span1,
+      indexMap: indexMap1
+    },
+    isIdentical
+  };
+}
+function storeSpanItemInIndexMap(span, indexMap, inSpanIndex, item) {
+  if (!indexMap.has(item))
+    indexMap.set(item, []);
+  indexMap.get(item).push(inSpanIndex + span.start);
+}
+function findMatchInIndexMaps(spanAndIndexMap0, spanAndIndexMap1) {
+  const threshold0 = spanAndIndexMap0.span.start;
+  const threshold1 = spanAndIndexMap1.span.start;
+  for (let i = 0; i < spanAndIndexMap0.span.length; i++) {
+    const item = spanAndIndexMap0.span.get(i);
+    const indicesInMap0 = spanAndIndexMap0.indexMap.get(item);
+    if (!indicesInMap0)
+      continue;
+    const indicesInMap1 = spanAndIndexMap1.indexMap.get(item);
+    if (!indicesInMap1)
+      continue;
+    for (const indexInMap0 of indicesInMap0) {
+      if (indexInMap0 < threshold0)
+        continue;
+      for (const indexInMap1 of indicesInMap1) {
+        if (indexInMap1 < threshold1)
+          continue;
+        let countOfMatchingItems = 0;
+        while (indexInMap0 + countOfMatchingItems <= spanAndIndexMap0.span.end && indexInMap1 + countOfMatchingItems <= spanAndIndexMap1.span.end && spanAndIndexMap0.span.get(indexInMap0 + countOfMatchingItems - threshold0) === spanAndIndexMap1.span.get(indexInMap1 + countOfMatchingItems - threshold1)) {
+          countOfMatchingItems++;
+        }
+        return [indexInMap0 - threshold0, indexInMap1 - threshold1, countOfMatchingItems];
+      }
+    }
+  }
+}
+
+// build/serialization/serializers/syncArray/serializer.js
+var TYPE_ID_NATIVEARRAY = "<nativeArray>";
+var TYPE_ID_SYNCARRAY = "<syncArray>";
+var TYPE_ID_OBSERVABLEARRAY = "<syncObservableArray>";
+var SyncArraySerializerBase = class extends ExtendedTypeSerializer {
+  constructor() {
+    super(...arguments);
+    __publicField(this, "_oldArrayContent", []);
+    __publicField(this, "_temporaryChanges", null);
+    __publicField(this, "_dispatcher");
+    __publicField(this, "_changeSetMode");
+  }
+  onInstanceSet(createdByCreateObjectMessage) {
+    super.onInstanceSet(createdByCreateObjectMessage);
+    const metaInfo = ensureSyncArrayMetaInfo(this.instance);
+    metaInfo?.on("addChange", (instance, change) => {
+      this.reportSplice(change.start, change.deletedItems.length, ...change.items);
+    });
+    if (createdByCreateObjectMessage)
+      return;
+  }
+  reportSplice(start, deleteCount, ...items) {
+    this.hasPendingChanges = true;
+    if (this.changeSetMode === "trackSplices") {
+      if (!this._temporaryChanges)
+        this._temporaryChanges = [];
+      this._temporaryChanges.push({
+        start,
+        deleteCount,
+        items
+      });
+    } else {
+      this._temporaryChanges = null;
+    }
+  }
+  get changeSetMode() {
+    return this._changeSetMode ?? this._objectInfo.owner.arrayChangeSetMode;
+  }
+  set changeSetMode(value) {
+    this._changeSetMode = value;
+  }
+  onCreateMessageReceived(message, clientToken) {
+    if (message.typeId === TYPE_ID_SYNCARRAY)
+      this.instance = new SyncableArray();
+    else if (message.typeId === TYPE_ID_OBSERVABLEARRAY)
+      this.instance = new SyncableObservableArray();
+    else
+      this.instance = new Array();
+    this.instance.push(...message.data.map((value) => this.deserializeValue(value, clientToken)));
+  }
+  onChangeMessageReceived(message, clientToken) {
+    const deserializedSplices = message.data.map((change) => ({
+      start: change.start,
+      deleteCount: change.deleteCount,
+      items: change.items.map((item) => this.deserializeValue(item, clientToken))
+    }));
+    applyChangeSet(this.instance, deserializedSplices);
+  }
+  generateMessages(clientToken, isNewClientConnection) {
+    const messages = [];
+    if (isNewClientConnection || this.hasPendingChanges) {
+      if (!this._temporaryChanges && this.changeSetMode === "compareStates") {
+        this._temporaryChanges = createChangeSet(this._oldArrayContent, this.instance);
+      }
+    }
+    if (isNewClientConnection) {
+      this.clearAllStoredReferencesWithClientConnection(clientToken);
+      this.instance.forEach((element, index) => {
+        this.storeReference(element, index, clientToken);
+      });
+      const data = [];
+      this.instance.forEach((element, index) => {
+        const mappedValue = this.serializeValue(element, clientToken);
+        data.push(mappedValue);
+      });
+      const createMessage = {
+        type: "create",
+        objectId: this.objectId,
+        typeId: this.getTypeId(clientToken),
+        data
+      };
+      messages.push(createMessage);
+    } else if (this.hasPendingChanges) {
+      this._temporaryChanges?.forEach((change) => {
+        for (let i = 0; i < change.deleteCount; i++)
+          this.storeReference(void 0, change.start + i, clientToken);
+        change.items.forEach((item, itemIndex) => {
+          this.storeReference(item, change.start + itemIndex, clientToken);
+        });
+      });
+      const data = this._temporaryChanges.map((change) => ({
+        start: change.start,
+        deleteCount: change.deleteCount,
+        items: change.items.map((item) => {
+          const mappedValue = this.serializeValue(item, clientToken);
+          return mappedValue;
+        })
+      }));
+      const changeMessage = {
+        type: "change",
+        objectId: this.objectId,
+        data
+      };
+      messages.push(changeMessage);
+    }
+    return messages;
+  }
+  clearStates(clientToken) {
+    super.clearStates(clientToken);
+    if (!clientToken) {
+      this._oldArrayContent = this.instance.slice();
+      this._temporaryChanges = null;
+    }
+  }
+  get dispatcher() {
+    return this._dispatcher ?? (this._dispatcher = this.createDispatcher());
+  }
+  createDispatcher() {
+    const self = this;
+    const result = {
+      reportSplice(...args) {
+        if (args.length === 0 && self.changeSetMode !== "compareStates") {
+          throw new Error("reportSplice requires parameters when arrayChangeSetMode is not 'compareStates'.");
+        } else if (args.length !== 0 && self.changeSetMode !== "trackSplices") {
+          throw new Error("reportSplice with parameters requires arrayChangeSetMode to be 'trackSplices'.");
+        }
+        self.reportSplice(...args);
+      },
+      get changeSetMode() {
+        return self.changeSetMode;
+      },
+      set changeSetMode(value) {
+        self.changeSetMode = value;
+      }
+    };
+    return result;
+  }
+};
+var ArraySerializer = class extends SyncArraySerializerBase {
+  static canSerialize(instanceOrTypeId) {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID_NATIVEARRAY;
+    }
+    return instanceOrTypeId instanceof Array;
+  }
+  getTypeId(clientToken) {
+    return TYPE_ID_NATIVEARRAY;
+  }
+};
+var SyncArraySerializer = class extends SyncArraySerializerBase {
+  static canSerialize(instanceOrTypeId) {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID_SYNCARRAY;
+    }
+    return instanceOrTypeId instanceof SyncableArray;
+  }
+  getTypeId(clientToken) {
+    return TYPE_ID_SYNCARRAY;
+  }
+};
+var SyncObservableArraySerializer = class extends SyncArraySerializerBase {
+  static canSerialize(instanceOrTypeId) {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID_OBSERVABLEARRAY;
+    }
+    return instanceOrTypeId instanceof SyncableObservableArray;
+  }
+  getTypeId(clientToken) {
+    return TYPE_ID_OBSERVABLEARRAY;
+  }
+};
+defaultIntrinsicSerializers.push(SyncObservableArraySerializer);
+defaultIntrinsicSerializers.push(SyncArraySerializer);
+defaultIntrinsicSerializers.push(ArraySerializer);
+
+// build/serialization/serializers/set.js
+var TYPE_ID = "<set>";
+var SetSerializer = class extends ExtendedTypeSerializer {
+  static canSerialize(instanceOrTypeId) {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID;
+    }
+    return instanceOrTypeId instanceof Set;
+  }
+  constructor(objectInfo) {
+    super(objectInfo);
+    if (objectInfo.instance) {
+      objectInfo.instance.forEach((value) => this.storeReference(value));
+    }
+  }
+  getTypeId(clientToken) {
+    return TYPE_ID;
+  }
+  onCreateMessageReceived(message, clientToken) {
+    this.instance = /* @__PURE__ */ new Set();
+    this.onChangeMessageReceived(message, clientToken);
+  }
+  onChangeMessageReceived(message, clientToken) {
+    this.instance.clear();
+    for (const value of message.data) {
+      this.instance.add(this.deserializeValue(value, clientToken));
+    }
+  }
+  generateMessages(clientToken, isNewClientConnection) {
+    if (!isNewClientConnection && !this.hasPendingChanges)
+      return [];
+    const message = {
+      type: isNewClientConnection ? "create" : "change",
+      objectId: this.objectId,
+      typeId: isNewClientConnection ? TYPE_ID : void 0,
+      data: this.getSerializedData(clientToken)
+    };
+    return [message];
+  }
+  getSerializedData(clientToken) {
+    this.clearAllStoredReferencesWithClientConnection(clientToken);
+    const data = [];
+    let index = 0;
+    this.instance.forEach((element) => {
+      this.storeReference(element, index, clientToken);
+      const mappedValue = this.serializeValue(element, clientToken);
+      data.push(mappedValue);
+      index++;
+    });
+    return data;
+  }
+};
+defaultIntrinsicSerializers.push(SetSerializer);
+
+// build/serialization/serializers/map.js
+var TYPE_ID2 = "<map>";
+var MapSerializer = class extends ExtendedTypeSerializer {
+  static canSerialize(instanceOrTypeId) {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID2;
+    }
+    return instanceOrTypeId instanceof Map;
+  }
+  constructor(objectInfo) {
+    super(objectInfo);
+    if (objectInfo.instance) {
+      objectInfo.instance.forEach((value) => this.storeReference(value));
+    }
+  }
+  getTypeId(clientToken) {
+    return TYPE_ID2;
+  }
+  onCreateMessageReceived(message, clientToken) {
+    this.instance = /* @__PURE__ */ new Map();
+    this.onChangeMessageReceived(message, clientToken);
+  }
+  onChangeMessageReceived(message, clientToken) {
+    this.instance.clear();
+    for (const value of message.data) {
+      this.instance.set(this.deserializeValue(value.key, clientToken), this.deserializeValue(value.value, clientToken));
+    }
+  }
+  generateMessages(clientToken, isNewClientConnection) {
+    if (!isNewClientConnection && !this.hasPendingChanges)
+      return [];
+    const message = {
+      type: isNewClientConnection ? "create" : "change",
+      objectId: this.objectId,
+      typeId: isNewClientConnection ? TYPE_ID2 : void 0,
+      data: this.getSerializedData(clientToken)
+    };
+    return [message];
+  }
+  getSerializedData(clientToken) {
+    this.clearAllStoredReferencesWithClientConnection(clientToken);
+    const data = [];
+    let index = 0;
+    for (const [key, value] of this.instance) {
+      this.storeReference(key, `key:${index}`, clientToken);
+      this.storeReference(value, `value:${index}`, clientToken);
+      index++;
+      const serializedKey = this.serializeValue(key, clientToken);
+      const serializedValue = this.serializeValue(value, clientToken);
+      data.push({ key: serializedKey, value: serializedValue });
+    }
+    return data;
+  }
+};
+defaultIntrinsicSerializers.push(MapSerializer);
+
+// build/serialization/serializers/object.js
+var TYPE_ID3 = "<object>";
+var ObjectSerializer = class extends ExtendedTypeSerializer {
+  static canSerialize(instanceOrTypeId) {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID3;
+    }
+    return typeof instanceOrTypeId === "object";
+  }
+  constructor(objectInfo) {
+    super(objectInfo);
+    if (objectInfo.instance) {
+      for (const key of Object.keys(objectInfo.instance)) {
+        const value = objectInfo.instance[key];
+        this.storeReference(value);
+      }
+    }
+  }
+  getTypeId(clientToken) {
+    return TYPE_ID3;
+  }
+  onCreateMessageReceived(message, clientToken) {
+    this.instance = {};
+    this.onChangeMessageReceived(message, clientToken);
+  }
+  onChangeMessageReceived(message, clientToken) {
+    for (const key of Object.keys(message.data)) {
+      this.instance[key] = this.deserializeValue(message.data[key], clientToken);
+    }
+  }
+  generateMessages(clientToken, isNewClientConnection) {
+    if (!isNewClientConnection && !this.hasPendingChanges)
+      return [];
+    const message = {
+      type: isNewClientConnection ? "create" : "change",
+      objectId: this.objectId,
+      typeId: isNewClientConnection ? TYPE_ID3 : void 0,
+      data: this.getSerializedData(clientToken)
+    };
+    return [message];
+  }
+  getSerializedData(clientToken) {
+    this.clearAllStoredReferencesWithClientConnection(clientToken);
+    const data = {};
+    for (const key of Object.keys(this.instance)) {
+      const value = this.instance[key];
+      this.storeReference(value, key, clientToken);
+      const mappedValue = this.serializeValue(value, clientToken);
+      data[key] = mappedValue;
+    }
+    return data;
+  }
+};
+defaultIntrinsicSerializers.push(ObjectSerializer);
 export {
-  ChangeTrackerObjectInfo,
-  ObjectChangeApplicator,
-  ObjectChangeTracker,
+  ChangeMessageType,
+  CreateMessageType,
+  DeleteMessageType,
+  EventEmitter,
+  ExecuteFinishedMessageType,
+  ExecuteMessageType,
+  ExtendedTypeSerializer,
+  MakeSimpleTypeSerializer,
   ObjectSync,
   SyncableArray,
   SyncableObservableArray,
-  TrackedObjectPool,
-  allTypeGenerators,
-  getApplicatorObjectInfo,
-  getObjectSyncMetaInfo,
-  getTrackerObjectInfo,
+  TypeSerializer,
+  allSyncObjectTypes,
+  deserializeValue,
+  deserializeValueAsync,
+  getTrackableTypeInfo,
+  isChangeObjectMessage,
+  isCreateObjectMessage,
+  isDeleteObjectMessage,
+  isExecuteFinishedObjectMessage,
+  isExecuteObjectMessage,
   nothing,
-  onCreated,
-  onDelete,
-  onDeleted,
-  onUpdateProperty,
-  onUpdated,
+  serializeValue,
   syncMethod,
   syncObject,
   syncProperty

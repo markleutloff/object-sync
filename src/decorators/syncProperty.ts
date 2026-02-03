@@ -1,0 +1,131 @@
+import "../shared/decorators.js";
+import { Constructor } from "../shared/types.js";
+import { ClientToken } from "../shared/clientToken.js";
+import { getObjectSyncMetaInfo, nothing } from "./base.js";
+import { ensureTrackableConstructorInfo, getTrackableTypeInfo } from "./syncObject.js";
+
+export type CanTrackPayload<T extends object, TKey extends keyof T & string> = {
+  // The instance of the object which contains the property/method.
+  instance: T;
+  // The name of the property/method which should be tracked.
+  key: TKey;
+  // The ChangeTrackerObjectInfo which tracks the property/method.
+  //info: ChangeTrackerObjectInfo<T>;
+};
+
+export type CanApplyPayload<T extends object, TKey extends keyof T & string> = {
+  // The instance of the object which contains the property/method.
+  instance: T;
+  // The name of the property/method which should be applied.
+  key: TKey;
+  // The clientToken from which the changes came from.
+  sourceClientConnection: ClientToken;
+};
+
+export type BeforeSendToClientPayload<T extends object, TKey extends keyof T & string, TValue> = {
+  // The instance of the object which contains the property.
+  instance: T;
+  // The name of the property which is being sent.
+  key: TKey;
+  // The current value of the property.
+  value: TValue;
+  // The client connection to which the value is being sent.
+  destinationClientConnection: ClientToken;
+};
+
+export type TrackedPropertySettingsBase<T extends object> = {
+  /**
+   * Returns true when the property/method should be tracked.
+   */
+  canTrack?<TKey extends keyof T & string>(this: T, payload: CanTrackPayload<T, TKey>): boolean;
+
+  /**
+   *  Returns true when the property/method change should be applied.
+   */
+  canApply?<TKey extends keyof T & string>(this: T, payload: CanApplyPayload<T, TKey>): boolean;
+
+  /**
+   * Defines how the property/method should be tracked/applied.
+   * - "trackAndApply": Changes to the property/method are tracked and applied (thats the default).
+   * - "trackOnly": Changes to the property/method are only tracked, not applied.
+   * - "applyOnly": Changes to the property/method are only applied, not tracked.
+   * - "none": Changes to the property/method are neither tracked nor applied.
+   */
+  mode?: "trackAndApply" | "trackOnly" | "applyOnly" | "none";
+};
+
+export type TrackedPropertySettings<T extends object, TValue> = TrackedPropertySettingsBase<T> & {
+  /**
+   * Function which is called before sending the property value to the client.
+   * Can be used to modify or filter the value being sent.
+   * When the symbol value "nothing" is returned, the property update will be skipped.
+   */
+  beforeSendToClient?<TKey extends keyof T & string>(this: T, payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
+};
+
+export type TrackedPropertyInfo<T extends object, TValue> = TrackedPropertySettings<T, TValue> & {};
+
+/**
+ * Property accessor decorator for marking a property as trackable.
+ * Registers the property and ensures changes are propagated to all TrackableObject instances.
+ */
+export function syncProperty<This extends object, Return>(settings?: TrackedPropertySettings<This, Return>) {
+  settings ??= {};
+
+  return function syncProperty(target: ClassAccessorDecoratorTarget<This, Return>, context: ClassAccessorDecoratorContext<This, Return>) {
+    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
+    const propertyInfo: TrackedPropertyInfo<This, Return> = {
+      ...settings,
+    };
+
+    const propertyName = context.name as string;
+    trackableInfo.trackedProperties.set(propertyName, propertyInfo);
+
+    const result: ClassAccessorDecoratorResult<This, Return> = {
+      set(value: any) {
+        target.set.call(this, value);
+
+        if (propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly") return;
+
+        const metaInfo = getObjectSyncMetaInfo(this as any);
+        metaInfo?.reportPropertyChanged(this as any, propertyInfo, propertyName, value);
+      },
+    };
+    return result;
+  };
+}
+
+export function checkCanApplyProperty(constructor: Constructor, instance: object, propertyKey: string, isMethod: boolean, sourceClientConnection: ClientToken) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) return false;
+  const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
+  if (!propertyInfo) return false;
+
+  if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly") return;
+  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientConnection }) === false) return false;
+  return true;
+}
+
+export function beforeSendPropertyToClient(constructor: Constructor, instance: object, propertyKey: string, value: any, destinationClientConnection: ClientToken) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return nothing;
+  }
+  const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
+  if (!propertyInfo) {
+    return nothing;
+  }
+  if (!propertyInfo.beforeSendToClient) {
+    return value;
+  }
+  return propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientConnection });
+}
+
+export function getSyncPropertyInfo(constructor: Constructor, propertyKey: string) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return null;
+  }
+  const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
+  return propertyInfo ?? null;
+}

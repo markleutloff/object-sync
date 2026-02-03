@@ -1,4 +1,4 @@
-import { syncMethod, syncObject, syncProperty, ClientConnection, ObjectSync } from "../../src/index.js";
+import { syncObject, syncProperty, ClientToken, ObjectSync } from "../../src/index.js";
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
 
@@ -9,27 +9,24 @@ class Root {
 }
 
 type ObjectSyncAndClientConnection = ObjectSync & {
-  hostClientConnection: ClientConnection;
+  hostClientConnection: ClientToken;
 };
 
 describe("ObjectSync multiple clients", () => {
   let hostObjectSync: ObjectSync;
-  let clientObjectSyncs: Map<ClientConnection, ObjectSyncAndClientConnection> = new Map();
+  let clientObjectSyncs: Map<ClientToken, ObjectSyncAndClientConnection> = new Map();
 
   let hostRoot: Root;
   let nextClientId = 0;
 
   async function exchangeMessagesAsync(): Promise<void> {
-    hostObjectSync.exchangeMessagesAsync(async (clientConnection, messages) => {
-      const clientObjectSync = clientObjectSyncs.get(clientConnection)!;
-      return clientObjectSync.applyMessagesFromClientAsync(clientObjectSync.hostClientConnection, messages);
+    await hostObjectSync.exchangeMessagesAsync({
+      sendToClientAsync: async (clientToken, messages) => {
+        const clientObjectSync = clientObjectSyncs.get(clientToken)!;
+        await clientObjectSync.applyMessagesAsync(messages, clientObjectSync.hostClientConnection);
+        return clientObjectSync.getMessages(clientObjectSync.hostClientConnection);
+      },
     });
-
-    for (const [clientConnection, clientObjectSync] of clientObjectSyncs) {
-      await clientObjectSync.exchangeMessagesAsync(async (targetClientConnection /* we only target the host */, messages) => {
-        return hostObjectSync.applyMessagesFromClientAsync(clientConnection, messages);
-      });
-    }
   }
 
   beforeEach(() => {
@@ -71,7 +68,7 @@ describe("ObjectSync multiple clients", () => {
     await exchangeMessagesAsync();
 
     for (const clientObjectSync of clientObjectSyncs.values()) {
-      const clientRoot = clientObjectSync.findObjectOfType(Root)!;
+      const clientRoot = clientObjectSync.findOne(Root)!;
       assert.notStrictEqual(clientRoot, hostRoot);
       assert.strictEqual(clientRoot.value, hostRoot.value);
     }

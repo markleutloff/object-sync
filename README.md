@@ -2,12 +2,16 @@
 
 Synchronize object state between host and client environments with fine-grained control over properties and methods. Supports multi-client scenarios and advanced array/object synchronization.
 
+Can also be used to simply serialize an object tree for later deserialization.
+
 **Note:** This library does not handle the connection or communication layer (such as transferring messages over ports, sockets, or other transport mechanisms). You are responsible for implementing the connection layer and for sending/receiving messages between host and client using your preferred method.
 
 **Security Note:**
 To prevent malicious or invalid data from being transferred, you must verify and validate all incoming and outgoing data yourself. Use the hooks provided by decorator functions (such as `canApply`, `canTrack`, `beforeSendToClient`, and `beforeExecuteOnClient`) to implement custom validation, filtering, and access control logic for your application.
 
-An `ObjectSync` instance will only create or instantiate types registered in its `typeGenerators` list. By default, all known types marked with `@syncObject` are allowed unless you restrict the configuration. This is not a strict security measure—if you need to limit which types can be synchronized and instantiated, you must explicitly control the contents of `typeGenerators`.
+An `ObjectSync` instance will only create or instantiate types registered in its `serializers` and `intrinsicSerializers` list. By default, all known types marked with `@syncObject` are allowed unless you restrict the configuration. This is not a strict security measure—if you need to limit which types can be synchronized and instantiated, you must explicitly control the contents of `serializers` and `intrinsicSerializers`.
+
+`intrinsicSerializers` containss serializers to handle `Set`, `Array`, `Map` and `Object` types without complex serialization logic.
 
 ## Key API Features
 
@@ -49,7 +53,7 @@ An `ObjectSync` instance will only create or instantiate types registered in its
 npm install simple-object-sync
 ```
 
-## Usage Examples
+## Usage
 
 ### Trackable Objects and Methods
 
@@ -60,7 +64,8 @@ import { syncObject, syncProperty, syncMethod } from "simple-object-sync";
 @syncObject()
 class SomeTrackableClass {
   // Track changes to this property and sync to clients
-  @syncProperty() accessor value: number = 0;
+  @syncProperty()
+  accessor value: number = 0;
 
   // Allow remote invocation of this method from clients
   @syncMethod({
@@ -73,7 +78,7 @@ class SomeTrackableClass {
       return true;
     },
   })
-  invoke(someArgument: string) {
+  someMethod(someArgument: string) {
     // In this sample we simply return the input argument
     return someArgument;
   }
@@ -88,7 +93,7 @@ import { ObjectSync } from "simple-object-sync";
 // Create the host instance and register trackable types
 const hostSync = new ObjectSync({
   identity: "host", // Unique identity for the host
-  typeGenerators: [SomeTrackableClass], // List of trackable types
+  serializers: [SomeTrackableClass], // List of trackable types
 });
 
 // Register multiple clients with unique identities
@@ -99,6 +104,23 @@ for (let i = 0; i < 3; i++) {
 }
 ```
 
+### Message exchange
+
+The ObjectSync instance provides a method that handles and delegates everything needed to transfer messages from the host and to a client including the awaiting for the client replies and application of the messages sent by those clients:
+
+```typescript
+await hostSync.exchangeMessagesAsync({
+    async sendToClientAsync(clientToken, messages): Message[] {
+     // Send the messages to your client (worker, eg.) that is associated with the target clientToken
+     ...
+     // The client should reply with the messages for the host
+     ...
+    },
+  });
+```
+
+The `exchangeMessagesAsync` supports specific `clients` with which it should exchange messages and an `errorHandler` with which you can react to errors throws while exchanging messages. It is also possible to filter incoming and outgoing messages with the help of the `clientMessageFilter`.
+
 ### Array Synchronization
 
 Synchronize changes to arrays and observable arrays between host and client.
@@ -107,43 +129,65 @@ Synchronize changes to arrays and observable arrays between host and client.
 import { SyncableArray } from "simple-object-sync";
 
 // Host: Track a SyncableArray instance
-const alpha = new SyncableArray<string>(["alpha", "beta"]);
+const alpha = new SyncableArray<string>("alpha", "beta");
 hostSync.track(alpha);
 
 // Client: Find the synchronized array instance
-const alphaClient = clientSync.findObjectOfType(SyncableArray<string>)!;
-assert.deepStrictEqual(alpha.value, alphaClient.value); // Values are kept in sync
+const alphaClient = clientSync.findOne(SyncableArray<string>)!;
+assert.deepStrictEqual(alpha, alphaClient); // Values are kept in sync
 ```
 
 ```typescript
 import { SyncableObservableArray } from "simple-object-sync";
 
 // Host: Track a SyncableObservableArray instance
-const alpha = new SyncableObservableArray<string>(["alpha", "beta"]);
+const alpha = new SyncableObservableArray<string>("alpha", "beta");
 hostSync.track(alpha);
 
 // Client: Find the synchronized array instance
-const alphaClient = clientSync.findObjectOfType(SyncableObservableArray<string>)!;
+const alphaClient = clientSync.findOne(SyncableObservableArray<string>)!;
 
 // Listen for items being added
-alphaClient.on("added", (items) => {
+alphaClient.on("added", (itemsAdded: string[]) => {
   // handle added items
 });
 
 // Listen for items being removed
-alphaClient.on("removed", (items) => {
+alphaClient.on("removed", (itemsRemoved: string[]) => {
   // handle removed items
 });
 ```
 
+#### Note:
+
+The `SyncableObservableArray<T>` and `SyncableArray<T>` can be used like a normal `Array<T>`:
+
+```typescript
+const array: Array<string> = new SyncableArray<string>("alpha", "beta");
+hostSync.track(array);
+
+array[0] = "gamma";
+array.push("delta");
+```
+
+You can also report changes to an normal tracked `Array<T>`:
+
+```typescript
+const array = ["alpha", "beta"];
+hostSync.track(array);
+
+array[0] = "gamma";
+array.push("delta");
+
+const arrayDispatcher = hostSync.getDispatcher(array)!;
+arrayDispatcher.reportSplice();
+```
+
 ### Custom Serializable Types
 
-You can create custom serializable types and register serializers/deserializers for them. These types will not be tracked by the system, but can be serialized and deserialized for transfer between host and client. This is useful for handling data structures or classes that do not require change tracking but need to be sent across the connection.
+You can add custom serializers with varying complexity. Serializers work by generating multiple messages needed to construct and interact with instances of the type the serializer should handle.
 
-Serializers/deserializers can be implemented in different ways, such as providing a `serialize` function to convert an object to plain data, and a `deserialize` function to reconstruct the object from data.
-Alternatively one can ignore the `serialize` and `deserialize`, in this case the constructor of the type will be used to deserialize and instance.toValue() or instance.toJSON() will be used to serialize the instance.
-
-Register your custom serializers in the `typeSerializers` option when creating an ObjectSync instance.
+The simplest form will generate a `create` message and apply this message when received. To further simplify the creation of serializers this library provides the `MakeSimpleTypeSerializer` helper method to create ready to use serializers for simple types:
 
 ```typescript
 class MySerializableClass {
@@ -159,67 +203,111 @@ class MySerializableClass {
 }
 ...
 
-const mySerializableClassSerializer = {
+import {MakeSimpleTypeSerializer } from "simple-object-sync";
+
+const MySerializableClassSerializer = MakeSimpleTypeSerializer<MySerializableClass, number>({
   typeId: "MySerializableClass",
   type: MySerializableClass,
-  serialize: (instance) => {
-    return {
-      value: instance.theValue
-    };
-  },
-  deserialize: (data) => new MySerializableClass(data.value),
-};
+  serialize: (obj: MySerializableClass) => obj.value,
+  deserialize: (data: any) => new MySerializableClass(data)
+});
 
 const hostSync = new ObjectSync({
   ...
-  typeSerializers: [mySerializableClassSerializer], // Register the serializer
+  serializers: [MySerializableClassSerializer, ...], // Register the serializer
 });
 ```
 
-Some serializers are automatically provided, those are called nativeTypeSerializers in this library.
-
-This are the native serializers automatically provided:
-
-- Object
-  ```typescript
-  { foo: "bar", hello: "world", someTrackableValue: bla }
-  ```
-- Array - Beware: changes will be fully transmitted, use the provided SyncableArray class if you do not want this
-  ```typescript
-  ["hello", 123, false, true, someTrackableValue];
-  ```
-- Map
-  ```typescript
-  const myMap = new Map<string, any>();
-  myMap.add("first", 1234);
-  myMap.add("second", true);
-  myMap.add("third", someTrackableValue);
-  ```
-- Set
-  ```typescript
-  const mySet = new Set<any>();
-  myMap.set(1234);
-  myMap.set(true);
-  myMap.set(someTrackableValue);
-  ```
-
-In the case that this is not what is wanted, one can provide a list of native serializers when creating any ObjectSync instance:
+More complex serializers can be implemented by either extending the `TypeSerializer` or `ExtendedTypeSerializer` class:
 
 ```typescript
-import { ObjectSync, nativeObjectSerializer, nativeArraySerializer, nativeSetSerializer, nativeTypeSerializers } from "simple-object-sync";
+import { EventEmitter } from "simple-object-sync";
 
-const hostSync = new ObjectSync({
-  ...
-  // specify it exactly
-  nativeTypeSerializers: [nativeObjectSerializer, nativeArraySerializer],
-  // or remove the unwanted ones
-  nativeTypeSerializers: nativeTypeSerializers.filter(serializer => serializer !== nativeSetSerializer),
-});
+type EventMap = {
+  valueChanged(): void;
+};
+class MyClass extends EventEmitter<EventMap> {
+  #myHiddenValue: number;
+
+  constructor(value: number = 0) {
+    super();
+    this.#myHiddenValue = value;
+  }
+
+  get theValue(): number {
+    return this.#myHiddenValue;
+  }
+  set theValue(value: number) {
+    this.#myHiddenValue = value;
+
+    // Emit a message to report changes.
+    this.emit("valueChanged");
+  }
+}
+```
+
+```typescript
+import { ExtendedTypeSerializer, ObjectInfo } from "simple-object-sync";
+
+type TInstance = MySerializableClass;
+type TPayload = number;
+const TYPE_ID = "MySerializableClass";
+
+class MyMySerializableClassSerializer extends ExtendedTypeSerializer<TInstance, TPayload> {
+  static canSerialize(instanceOrTypeId: TInstance | string): boolean {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID;
+    }
+    return instanceOrTypId instanceof MySerializableClass;
+  }
+
+  public override onInstanceSet(createdByCreateObjectMessage: boolean): void {
+    super.onInstanceSet(createdByCreateObjectMessage);
+
+    this..instance.on("valueChanged", () => {
+      this.hasPendingChanges = true; // Defined in the base class to help with detecting changes.
+    });
+  }
+
+  getTypeId(clientToken: ClientToken) {
+    return TYPE_ID;
+  }
+
+  onCreateMessageReceived(message: CreateObjectMessage<TPayload>, clientToken: ClientToken): void {
+    this.instance = new MySerializableClass(message.data);
+  }
+
+  override onChangeMessageReceived(message: ChangeObjectMessage<TPayload>, clientToken: ClientToken): void {
+    this.instance.theValue = message.data;
+  }
+
+  generateMessages(clientToken: ClientToken, isNewClientConnection: boolean): Message[] {
+    if (isNewClientConnection) {
+       const message: CreateObjectMessage<TPayload> = {
+        type: "create",
+        objectId: this.objectId,
+        typeId: TYPE_ID,
+        data: this.instance.theValue,
+      };
+      return [message];
+    }
+    else if (this.hasPendingChanges) {
+      const message: ChangeObjectMessage<TPayload> = {
+        type: "change",
+        objectId: this.objectId,
+        data: this.instance.theValue,
+      };
+      return [message];
+    }
+
+    return [];
+  }
+}
 ```
 
 ### Control property/method sync behavior
 
-Use hooks like `beforeSendToClient`, `canApply`, and `beforeExecuteOnClient` for fine-grained control over what gets synchronized and when.
+Use hooks like `clientTypeId`, `beforeSendToClient`, `canApply`, and `beforeExecuteOnClient` and more for fine-grained control over what gets synchronized and when.
 
 You can change the type which will be reported to any client or simply disallow it to be created on the client:
 
@@ -227,7 +315,7 @@ You can change the type which will be reported to any client or simply disallow 
 import { syncObject, nothing } from "simple-object-sync";
 
 @syncObject({
-  beforeSendToClient({instance, constructor, typeId, destinationClientConnection}) {
+  clientTypeId({instance, constructor, typeId, destinationClientConnection}) {
     // Client should receive a different type than this:
     return OtherTrackableType; // ot the TypeId string of an other type like: "TheTypeIdOfSomethingElse"
 
@@ -237,6 +325,9 @@ import { syncObject, nothing } from "simple-object-sync";
     // The client should receive nothing, no object should be sent to the client
     return nothing;
   }
+
+  // it is also possible to just provide the type without a function:
+  clientTypeId: OtherTrackableType
 })
 class MyTrackableClass {
   ...
@@ -332,37 +423,39 @@ class MyTrackableClass {
       return false;
     },
   })
-  someMethod(someArgument: string) {
+  someMethod(someArgument: string): string {
     return someArgument;
   }
 }
 ```
 
-This is how to best execute a syncable method:
+This is how to execute a method on all currently connected clients:
 
 ```typescript
-const { clientResults, hostResult } = hostObjectSync.getMethodInvokeProxy(myHostObject).someMethod(someArgument);
-const hostResultValue = hostResult;
+const dispatcher = hostObjectSync.getDispatcher(myHostObject);
+const resultsByClient: Map<ClientToken, Promise<string>> = dispatcher.invoke("someMethod", someArgument);
 
-await exchangeMessagesAsync(hostObjectSync, clientObjectSync);
+...
 
-// clientResults must be awaited after we have exchanged messages
-// tthe reason for this: only after that, we now about any clients we may have
-const clientInvokeResults = await clientResults;
-
-// now we can get the result for a specific client
-// we await these too, because the time of resolve/reject may come after the previous message exchange
-// this is based upon the promiseHandlingType set in the syncMethod decorator
-const clientResult = await clientInvokeResults.get(someClientConnection);
+// when the method that should be invoked has the promiseHandlingType of "await" or when the
+// method that should be executed does not return a Promise the results are ready directly after the message exchange.
+const clientResult = await resultsByClient.get(someClientConnection);
 ```
 
-Alternative way to invoke a method:
+Methods can also be executed on a specific client set:
 
 ```typescript
-const { clientResults, hostResult } = hostObjectSync.invoke(myHostObject, "someMethod", someArgument);
+const resultsByClient: Map<ClientToken, Promise<string>> = dispatcher.invoke([clientToken1, clientToken2], "someMethod", someArgument);
 ```
 
-See `tests/ts/objectSync.test.ts`, `tests/ts/syncableArray.test.ts`, `tests/ts/syncableObservableArray.test.ts`, and `tests/ts/multiClient.test.ts` for more advanced scenarios and real-world patterns.
+Or just on a single client:
+
+```typescript
+const dispatcher = hostObjectSync.getDispatcher(myHostObject);
+const clientResult: Promise<string> = dispatcher.invoke(clientToken1, "someMethod", someArgument);
+```
+
+The result promises will automatically be rejected when the client prohibits it or when a client gets unregistered from your ObjectSync instance.
 
 ### Mock Communication Layer Example (using worker threads)
 
@@ -372,46 +465,28 @@ Below is a mock implementation of a communication layer using worker threads, in
 
 ```typescript
 import { Worker } from "node:worker_threads";
-import { ObjectSync } from "simple-object-sync";
+import { ObjectSync, Message } from "simple-object-sync";
 
 // Helper function which creates a client with a worker and registers the client to the provided host.
 function createWorkerClient(hostSync, identity) {
   const worker = new Worker("./worker.js");
   const clientToken = hostSync.registerClient({ identity });
 
-  const workerClient = {
+  const client = {
     clientToken,
     terminate() {
       hostSync.removeClient(clientToken);
       worker.terminate();
     },
-    requestAsync(type, data) {
-      return new Promise((resolve) => {
+    sendAndRequestMessagesAsync(messages: Message[]) {
+      return new Promise<Message[]>((resolve) => {
         worker.once("message", resolve);
-        worker.postMessage({ type, data });
+        worker.postMessage(messages);
       });
     },
   };
 
-  return workerClient;
-}
-
-// Helper function that will sync the states between the host and the clients
-async function exchangeMessagesWithClientsAsync(hostSync, clients) {
-  // Map to store the sync messages send from the clients
-  const messagesFromClients = new Map();
-
-  await hostSync.exchangeMessagesAsync(async (clientToken, messages) => {
-    const client = clients.find((c) => c.clientToken === clientToken);
-
-    // Exchange sync messages from the host to the client and store the sync back reply of the client
-    const result = await client.requestAsync("applySyncMessages", messages);
-    messagesFromClients.set(clientToken, result.messages);
-
-    return result.methodResponses;
-  });
-  // Apply the sync messages from the clients (can be ignored when the clients should never send changes to the host)
-  await hostSync.applyMessagesAsync(messagesFromClients);
+  return client;
 }
 
 // Creating and registering clients:
@@ -419,8 +494,19 @@ const clients = [];
 clients.push(createWorkerClient(hostSync, "someClient"));
 clients.push(createWorkerClient(hostSync, "someOtherClient"));
 
+...
+
 // Exchanging messages/updates
-await exchangeMessagesWithClientsAsync(hostSync, clients);
+await hostSync.exchangeMessagesAsync({
+  sendToClientAsync(clientToken, messages) {
+    const client = clients.find((c) => c.clientToken === clientToken);
+
+    // Send messages to the client and await the response
+    return client.sendAndRequestMessagesAsync(messages);
+  },
+});
+
+...
 
 // Cleanup
 clients.forEach((c) => c.terminate());
@@ -430,31 +516,56 @@ clients.forEach((c) => c.terminate());
 
 ```typescript
 import { parentPort } from "worker_threads";
-import { ObjectSync } from "simple-object-sync";
+import { ObjectSync, Message } from "simple-object-sync";
 
 ...
 
-const clientSync = new ObjectSync({ identity: "client", typeGenerators: [SomeTrackableClass] });
+const clientSync = new ObjectSync({
+  identity: "client",
+  serializers: [SomeTrackableClass]
+});
 const clientTokenFromHost = clientSync.registerClient({ identity: "host" });
 
-parentPort.on("message", async (message) => {
-  if (message.type !== "applySyncMessages") {
-    // Apply the changes which the host has sent and store possibly method call responses
-    const methodResponses = await clientSync.applyMessagesFromClientAsync(clientTokenFromHost, message.data);
+parentPort.on("message", async (messages: Message[]) => {
+  // Apply the changes which the host has sent
+  await clientSync.applyMessagesAsync(messages, clientTokenFromHost);
 
-    // Retrive the tracked changes this client may have made to send it back to the host
-    const messages = clientSync.getMessages();
+  // Retrive the messagesthis client may have for our host
+  const replyMessages = clientSync.getMessages(clientTokenFromHost);
 
-    // call back to the host with the reply of our changes and method call results
-    parentPort.postMessage({
-      methodResponses,
-      messages: messages.get(clientTokenFromHost),
-    });
-  }
+  // call back to the host with our messages
+  parentPort.postMessage(replyMessages);
 });
 ```
 
-This example abstracts the transport using worker threads, but you can adapt the pattern to any communication layer (e.g., sockets, web workers, etc.). The host sends messages to each client, and the client applies them and responds with any updates or method results.
+This example abstracts the transport using worker threads, but you can adapt the pattern to any communication layer (e.g., sockets, web workers, etc.). The host sends messages to each client, and the client applies them and responds with his own messages.
+
+## Simple reference stable serialization and storage
+
+This library can also be used to store an object graph for later reuse:
+
+```typescript
+import { serializeValue, deserializeValue} from "simple-object-sync";
+
+const testObject: Record<string, any> = {
+  a: 1,
+  b: "test",
+  c: true,
+  d: null,
+  e: undefined,
+  f: { nested: "value" },
+  g: [1, 2, 3],
+  h: new Map([
+    ["key1", "value1"],
+    ["key2", "value2"],
+  ]),
+  i: new Set([1, 2, 3]),
+};
+testObject.self = testObject;
+
+const serialized = serializeValue(testObject);
+const deserialized = deserializeValue(serialized)!;
+```
 
 ## Testing
 

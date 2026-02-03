@@ -60,3 +60,11 @@ export function hasInIterable<T>(input: OneOrMany<T>, expected: T): boolean {
 }
 
 export type Constructor<T = any> = { new (...args: any[]): T };
+
+export function isPrimitiveValue(value: any): boolean {
+  return value === undefined || value === null || (typeof value !== "object" && typeof value !== "function");
+}
+
+export function isPromiseLike(value: any): value is Promise<any> {
+  return value && typeof value.then === "function" && typeof value.catch === "function";
+}

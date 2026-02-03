@@ -2,7 +2,7 @@ export const isPropertyInfoSymbol = Symbol("isPropertyInfo");
 
 export type PropertyInfo<T extends object, TKey extends keyof T> = {
   value?: T[TKey];
-  objectId?: unknown;
+  objectId?: string;
   typeId?: string;
   [isPropertyInfoSymbol]?: true;
 };
@@ -15,45 +15,78 @@ export type ResolvablePropertyInfos<T> = {
   [K in keyof T]?: T[K];
 };
 
-export type MessageBase = {
+export const CreateMessageType = "create";
+export const ChangeMessageType = "change";
+export const DeleteMessageType = "delete";
+export const ExecuteMessageType = "execute";
+export const ExecuteFinishedMessageType = "executeFinished";
+
+export type Message = {
   type: string;
-  objectId: unknown;
+  objectId: string;
 };
 
-export type DeleteObjectMessage = MessageBase & { type: "delete" };
-
-export type CreateObjectMessage<T extends object, TAdditionalPropertyInfo extends object = object> = MessageBase & {
-  type: "create";
+export type CreateObjectMessage<TPayload = any> = Message & {
+  type: typeof CreateMessageType;
   typeId: string;
-  properties: PropertyInfos<T, TAdditionalPropertyInfo>;
+  data: TPayload;
 };
 
-export type ChangeObjectMessage<T extends object, TAdditionalPropertyInfo extends object = object> = MessageBase & {
-  type: "change";
-  properties: PropertyInfos<T, TAdditionalPropertyInfo>;
+export type ChangeObjectMessage<TPayload = any> = Message & {
+  type: typeof ChangeMessageType;
+  data: TPayload;
 };
 
-export type ExecuteObjectMessage<T extends object> = MessageBase & {
-  type: "execute";
+export type DeleteObjectMessage = Message & {
+  type: typeof DeleteMessageType;
+};
+
+export type ExecuteObjectMessage<TInstance extends object = any, TMethodName extends string & keyof TInstance = any> = Message & {
+  type: typeof ExecuteMessageType;
   id: unknown;
-  method: keyof T & string;
-  parameters: PropertyInfos<any, any>[];
+  method: TMethodName;
+  parameters: TInstance[TMethodName] extends (...args: infer TArguments) => any ? TArguments : never;
 };
 
-export type Message<T extends object = object, TAdditionalPropertyInfo extends object = object> =
-  | DeleteObjectMessage
-  | CreateObjectMessage<T, TAdditionalPropertyInfo>
-  | ChangeObjectMessage<T, TAdditionalPropertyInfo>
-  | ExecuteObjectMessage<T>;
+export type ExecuteFinishedObjectMessage = Message & {
+  type: typeof ExecuteFinishedMessageType;
+  invokeId: unknown;
+  error?: any;
+  result?: any;
+};
 
 export function isPropertyInfo(value: any): value is PropertyInfo<any, any> {
   return isPropertyInfoSymbol in value;
 }
 
 export type MethodExecuteResult = {
-  id: unknown;
-  objectId: unknown;
-  result: any;
-  status: "resolved" | "rejected";
-  error: any;
-};
+  invokeId: unknown;
+  objectId: string;
+} & (
+  | {
+      error: any;
+    }
+  | {
+      result: any;
+    }
+);
+
+export function isExecuteObjectMessage(message: Message): message is ExecuteObjectMessage {
+  return message.type === ExecuteMessageType;
+}
+
+export function isChangeObjectMessage(message: Message): message is ChangeObjectMessage {
+  return message.type === ChangeMessageType;
+}
+
+export function isCreateObjectMessage(message: Message): message is CreateObjectMessage {
+  return message.type === CreateMessageType;
+}
+
+export function isDeleteObjectMessage(message: Message): message is DeleteObjectMessage {
+  return message.type === DeleteMessageType;
+}
+
+export function isExecuteFinishedObjectMessage(message: Message): message is ExecuteFinishedObjectMessage {
+  return message.type === ExecuteFinishedMessageType;
+}
