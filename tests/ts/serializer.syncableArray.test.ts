@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
-import { SyncableArray, ObjectSync, syncMethod, syncProperty, syncObject, ChangeObjectMessage, ClientToken, Message } from "../../src/index.js";
-import { SpliceInstruction } from "../../src/serialization/serializers/syncArray/changeSet.js";
+import { SyncableArray, ObjectSync, syncMethod, syncProperty, syncObject, ChangeObjectMessage, ClientToken, Message, SyncableArraySerializer } from "../../src/index.js";
+import { SpliceInstruction } from "../../src/serialization/serializers/array/changeSet.js";
 import assert from "assert";
 
 @syncObject()
@@ -20,7 +20,7 @@ class Alpha {
 @syncObject()
 class Beta {}
 
-describe("SyncableArray", () => {
+describe("SyncableArray Serializer", () => {
   let sourceSync: ObjectSync;
   let destSync: ObjectSync;
   let sourceArray: any[];
@@ -44,10 +44,12 @@ describe("SyncableArray", () => {
   beforeEach(() => {
     sourceSync = new ObjectSync({
       identity: "source",
+      serializers: [Alpha, Beta, SyncableArraySerializer],
     });
     sourceSyncDestClientToken = sourceSync.registerClient({ identity: "dest" });
     destSync = new ObjectSync({
       identity: "dest",
+      serializers: [Alpha, Beta, SyncableArraySerializer],
     });
     destSyncDestClientToken = destSync.registerClient({ identity: "source" });
 

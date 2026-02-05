@@ -1,4 +1,4 @@
-import { createChangeSet, applyChangeSet } from "../../src/serialization/serializers/syncArray/changeSet.js";
+import { createChangeSet, applyChangeSet } from "../../src/serialization/serializers/array/changeSet.js";
 import { describe, it } from "node:test";
 import assert from "assert";
 

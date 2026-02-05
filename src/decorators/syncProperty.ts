@@ -19,7 +19,7 @@ export type CanApplyPayload<T extends object, TKey extends keyof T & string> = {
   // The name of the property/method which should be applied.
   key: TKey;
   // The clientToken from which the changes came from.
-  sourceClientConnection: ClientToken;
+  sourceClientToken: ClientToken;
 };
 
 export type BeforeSendToClientPayload<T extends object, TKey extends keyof T & string, TValue> = {
@@ -30,7 +30,7 @@ export type BeforeSendToClientPayload<T extends object, TKey extends keyof T & s
   // The current value of the property.
   value: TValue;
   // The client connection to which the value is being sent.
-  destinationClientConnection: ClientToken;
+  destinationClientToken: ClientToken;
 };
 
 export type TrackedPropertySettingsBase<T extends object> = {
@@ -95,30 +95,44 @@ export function syncProperty<This extends object, Return>(settings?: TrackedProp
   };
 }
 
-export function checkCanApplyProperty(constructor: Constructor, instance: object, propertyKey: string, isMethod: boolean, sourceClientConnection: ClientToken) {
+export function checkCanApplyProperty(constructor: Constructor, instance: object, propertyKey: string, isMethod: boolean, sourceClientToken: ClientToken) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) return false;
   const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
   if (!propertyInfo) return false;
 
   if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly") return;
-  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientConnection }) === false) return false;
+  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientToken }) === false) return false;
   return true;
 }
 
-export function beforeSendPropertyToClient(constructor: Constructor, instance: object, propertyKey: string, value: any, destinationClientConnection: ClientToken) {
+export function beforeSendPropertyToClient(constructor: Constructor, instance: object, propertyKey: string, value: any, destinationClientToken: ClientToken) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
-    return nothing;
+    return {
+      skip: true,
+    };
   }
   const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
   if (!propertyInfo) {
-    return nothing;
+    return {
+      skip: true,
+    };
   }
   if (!propertyInfo.beforeSendToClient) {
-    return value;
+    return {
+      value,
+    };
   }
-  return propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientConnection });
+  const result = propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientToken });
+  if (result === nothing) {
+    return {
+      skip: true,
+    };
+  }
+  return {
+    value: result,
+  };
 }
 
 export function getSyncPropertyInfo(constructor: Constructor, propertyKey: string) {

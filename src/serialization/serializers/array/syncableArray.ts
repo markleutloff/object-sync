@@ -1,4 +1,5 @@
-import { getSyncArrayMetaInfo } from "./metaInfo.js";
+import { SyncArrayMetaInfo } from "./metaInfo.js";
+import { getMetaInfo } from "../../../shared/metaInfo.js";
 import { SpliceInstructionEx } from "./changeSet.js";
 
 const realInstanceSymbol = Symbol("realInstanceSymbol");
@@ -216,7 +217,7 @@ export class SyncableArray<T = any> extends Array<T> {
   }
 
   protected onSplice(spliceInstruction: SpliceInstructionEx<T>) {
-    getSyncArrayMetaInfo(this)?.reportArrayChanged(this, spliceInstruction);
+    getMetaInfo(this, SyncArrayMetaInfo)?.reportSplice(this, spliceInstruction);
   }
 }
 

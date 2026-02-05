@@ -2,8 +2,9 @@ import { describe, it, beforeEach } from "node:test";
 import { ObjectSync, ClientToken, Message } from "../../src/index.js";
 import { assertObjectsEqual } from "./utils.js";
 import assert from "assert";
+import { SyncableSet } from "../../src/serialization/index.js";
 
-describe("Set Serializer", () => {
+describe("SyncableSet Serializer", () => {
   let sourceSync: ObjectSync;
   let destSync: ObjectSync;
   let sourceObject: Set<any>;
@@ -25,7 +26,7 @@ describe("Set Serializer", () => {
     });
     destSyncDestClientToken = destSync.registerClient({ identity: "source" });
 
-    sourceObject = new Set();
+    sourceObject = new SyncableSet();
     sourceObject.add("value1");
     sourceObject.add(42);
     sourceObject.add(true);

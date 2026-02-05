@@ -1,140 +1,49 @@
-import { allSyncObjectTypes } from "../decorators/syncObject.js";
 import { CreateObjectMessage, DeleteObjectMessage, isCreateObjectMessage, isDeleteObjectMessage, Message } from "../shared/messages.js";
 import { ObjectInfo } from "../shared/objectInfo.js";
 import { ObjectPool } from "../shared/objectPool.js";
 import { Constructor, forEachIterable, isIterable, isPrimitiveValue, OneOrMany } from "../shared/types.js";
 import { ClientToken, ClientConnectionSettings } from "../shared/clientToken.js";
-import { defaultIntrinsicSerializers } from "../serialization/serializers/base.js";
-import { getSyncObjectSerializer, ISyncObjectDispatcher, SyncObjectSerializer } from "../serialization/serializers/syncObject/index.js";
-import { TypeSerializer, TypeSerializerConstructor } from "../serialization/serializer.js";
+import { defaultIntrinsicSerializers, defaultSerializersOrTypes } from "../serialization/serializers/base.js";
+import { ISyncObjectDispatcher } from "../serialization/serializers/syncObject/index.js";
+import { TypeSerializer } from "../serialization/serializer.js";
 import { ClientTokenFilter } from "./clientFilter.js";
-import { ObjectReference } from "./objectReference.js";
-import { ISyncArrayDispatcher } from "../serialization/serializers/syncArray/serializer.js";
-import { PrimitiveValue } from "./primitiveValue.js";
-
-export type ExchangeMessagesSettings = {
-  /**
-   * Optional function to handle errors that occur during message exchange.
-   * @param clientToken The client connection where the error occurred.
-   * @param error The error that occurred.
-   */
-  errorHandler?: (clientToken: ClientToken, error: any) => void;
-
-  /**
-   * Optional function to filter messages sent to or received from clients.
-   * Warning: Using this filter may lead to inconsistent states between server and clients if messages are blocked.
-   * You can use it to implement custom logic, such as ignoring certain messages for specific clients.
-   * @param clientToken The client connection involved in the message exchange.
-   * @param message The message being sent or received.
-   * @param isIncoming True if the message is incoming to the server, false if outgoing.
-   * @returns True to allow the message, false to block it.
-   */
-  clientMessageFilter?: (clientToken: ClientToken, message: Message, isIncoming: boolean) => boolean;
-
-  /**
-   * Clients to exchange messages with. If not provided, messages will be exchanged with all registered clients.
-   */
-  clients?: ClientToken[];
-} & (
-  | {
-      /**
-       * Function to send messages to a single client and receive client messages back as results.
-       * @param clientToken The client connection to send messages to.
-       * @param messages The messages to send to the client.
-       * @returns A promise that resolves to the messages received from the client.
-       */
-      sendToClientAsync: (clientToken: ClientToken, messages: Message[]) => Promise<Message[]>;
-    }
-  | {
-      /**
-       * Function to send messages to multiple clients and receive client messages back as results.
-       * @param messagesByClientToken A map of client connections to messages to send.
-       * @returns A promise that resolves to a map of client connections to messages received from the clients.
-       */
-      sendToClientsAsync: (messagesByClientToken: Map<ClientToken, Message[]>) => Promise<Map<ClientToken, Message[]>>;
-    }
-);
-
-export type ObjectIdGeneratorSettings =
-  | {
-      /**
-       * Function to generate an object ID..
-       * @param value
-       */
-      generateId(value?: object): string;
-    }
-  | {
-      /**
-       * Prefix to use for generated object IDs.
-       */
-      prefix: string;
-    };
-
-export type FinalizedObjectSyncSettings = {
-  identity: string;
-  serializers: TypeSerializerConstructor[];
-  intrinsicSerializers: TypeSerializerConstructor[];
-  objectIdGeneratorSettings: ObjectIdGeneratorSettings;
-  arrayChangeSetMode: "trackSplices" | "compareStates";
-};
-
-export type ObjectSyncSettings = {
-  /**
-   * Identity of this ObjectSync instance (e.g., "host" or "client1").
-   */
-  identity: string;
-  /**
-   * Type serializers to use for serializing and deserializing property values during synchronization.
-   * Can either be provided as an array of type serializers or constructors of SyncObject types.
-   * When constructors are provided, the corresponding internal SyncObjectSerializer will be used.
-   * When not provided, all registered SyncObject types will be used.
-   */
-  serializers?: (TypeSerializerConstructor | Constructor)[];
-  /**
-   * Intrinsic type serializers to use for serializing and deserializing base types (Array, Map, Set, Object) during synchronization.
-   * Can be provided as an array of type serializers.
-   * When not provided, default intrinsic type serializers will be used.
-   */
-  intrinsicSerializers?: TypeSerializerConstructor[];
-  /**
-   * Settings for generating object IDs.
-   * When not provided, a default generator with the identity as prefix will be used (eg: "host-1").
-   */
-  objectIdGeneratorSettings?: ObjectIdGeneratorSettings;
-
-  /**
-   * Defines how array changes are tracked and serialized.
-   * - "trackSplices": Uses splice instructions to record changes. More efficient for small changes. May transfer data which will be removed with a later splice.
-   * - "compareStates": gathers splice data by comparing the old array state to the new array state. More efficient for large changes. (Default)
-   */
-  arrayChangeSetMode?: "trackSplices" | "compareStates";
-};
+import { ISyncArrayDispatcher } from "../serialization/serializers/array/serializer.js";
+import { PrimitiveValue, ObjectReference, SerializedValue, TypeSerializerConstructor } from "../serialization/serializedTypes.js";
+import { WeakObjectPool } from "../shared/weakObjectPool.js";
+import { ExchangeMessagesSettings, FinalizedObjectSyncSettings, ObjectSyncSettings } from "./types.js";
+import { getTypeSerializerClass } from "../serialization/utils.js";
 
 export class ObjectSync {
   private readonly _objectPool = new ObjectPool();
+  private readonly _weakObjectPool: WeakObjectPool | null = null;
   private readonly _objectsWithPendingMessages = new Set<object>();
   private readonly _clients: Set<ClientToken> = new Set();
   private readonly _settings: FinalizedObjectSyncSettings;
+  private readonly _pendingWeakDeletes: { objectId: string; clients: Set<ClientToken> }[] = [];
   private _nextObjectId = 1;
 
   private _pendingCreateMessageByObjectId: Map<string, CreateObjectMessage> = new Map();
-  private readonly _ownClientConnection: ClientToken;
+  private readonly _ownClientToken: ClientToken;
 
   constructor(settings: ObjectSyncSettings) {
     this._settings = {
       identity: settings.identity,
-      serializers: (settings.serializers ?? Array.from(allSyncObjectTypes)).map((ctor) => {
-        if ("canSerialize" in ctor) return ctor as TypeSerializerConstructor;
-        return getSyncObjectSerializer(ctor);
-      }),
+      serializers: (settings.serializers ?? defaultSerializersOrTypes).map(getTypeSerializerClass),
       intrinsicSerializers: settings.intrinsicSerializers ?? defaultIntrinsicSerializers,
       objectIdGeneratorSettings: settings.objectIdGeneratorSettings ?? {
         prefix: settings.identity,
       },
       arrayChangeSetMode: settings.arrayChangeSetMode ?? "compareStates",
+      memoryManagementMode: settings.memoryManagementMode ?? "byClient",
     };
+    if (this._settings.memoryManagementMode === "weak") {
+      this._weakObjectPool = new WeakObjectPool();
+      this._weakObjectPool.on("freed", (objectId, clients) => {
+        this._pendingWeakDeletes.push({ objectId, clients });
+      });
+    }
 
-    this._ownClientConnection = this.registerClient({ identity: settings.identity });
+    this._ownClientToken = this.registerClient({ identity: settings.identity });
   }
 
   get arrayChangeSetMode() {
@@ -166,7 +75,7 @@ export class ObjectSync {
   }
 
   get registeredClientTokens() {
-    return Array.from(this._clients).filter((c) => c !== this._ownClientConnection);
+    return Array.from(this._clients).filter((c) => c !== this._ownClientToken);
   }
 
   /**
@@ -178,7 +87,7 @@ export class ObjectSync {
     }
 
     this._objectPool.infos.forEach((info) => {
-      info.serializer.onClientConnectionRemoved(clientToken);
+      info.serializer.onClientRemoved(clientToken);
     });
 
     this._clients.delete(clientToken);
@@ -219,7 +128,7 @@ export class ObjectSync {
       throw new Error("Cannot track primitive value as root.");
     }
     info.isRoot = true;
-    info.serializer.clients.add(this._ownClientConnection);
+    info.serializer.clients.add(this._ownClientToken);
   }
 
   trackInternal(instance: object, objectId?: string): ObjectInfo | null {
@@ -227,6 +136,14 @@ export class ObjectSync {
     let info = this._objectPool.getInfoByObject(instance);
     if (info) {
       return info;
+    }
+
+    if (this._settings.memoryManagementMode === "weak") {
+      const info = this._weakObjectPool!.extractByInstance(instance);
+      if (info) {
+        this._objectPool.add(info);
+        return info;
+      }
     }
 
     if (objectId !== undefined) {
@@ -302,15 +219,23 @@ export class ObjectSync {
     this._objectPool.deleteById(message.objectId);
   }
 
-  public serializeValue(value: any, clientToken: ClientToken): PrimitiveValue | ObjectReference | undefined {
+  public serializeValue(value: any, clientToken: ClientToken): SerializedValue {
     if (isPrimitiveValue(value)) {
-      return new PrimitiveValue(value);
+      return {
+        value,
+      };
     }
 
-    return ObjectReference.from(this.trackInternal(value as any)!, clientToken);
+    const objectInfo = this.trackInternal(value as any)!;
+    const typeId = objectInfo.serializer.getTypeId(clientToken);
+    if (typeId === undefined || typeId === null) {
+      return undefined;
+    }
+
+    return { objectId: objectInfo.objectId, typeId };
   }
 
-  public deserializeValue(value: PrimitiveValue | ObjectReference | undefined, clientToken: ClientToken) {
+  public deserializeValue(value: SerializedValue, clientToken: ClientToken) {
     if (value === undefined) return undefined;
     if (!("objectId" in value)) {
       return value.value;
@@ -400,9 +325,11 @@ export class ObjectSync {
     });
     this._objectsWithPendingMessages.clear();
 
-    this._objectPool.orphanedObjectInfos(this._ownClientConnection).forEach((info) => {
+    this._objectPool.orphanedObjectInfos(this._ownClientToken).forEach((info) => {
       this._objectPool.deleteByObject(info.instance!);
     });
+
+    this._pendingWeakDeletes.length = 0;
   }
 
   /**
@@ -473,7 +400,7 @@ export class ObjectSync {
   private getMessagesForClients(clientOrClientTokens: OneOrMany<ClientToken>, clearNonClientStates: boolean): Map<ClientToken, Message[]> {
     const resultByClient = new Map<ClientToken, Message[]>();
     forEachIterable(clientOrClientTokens!, (clientToken) => {
-      if (clientToken === this._ownClientConnection) return;
+      if (clientToken === this._ownClientToken) return;
 
       const generatedMessages: Message[] = [];
       const serializersWhichsStatesNeedsToBeCleared: Set<TypeSerializer<any>> = new Set();
@@ -491,9 +418,7 @@ export class ObjectSync {
         generatedMessages.push(...messages);
       }
 
-      for (const serializer of serializersWhichsStatesNeedsToBeCleared) {
-        serializer.clearStates(clientToken);
-      }
+      for (const serializer of serializersWhichsStatesNeedsToBeCleared) serializer.clearStates(clientToken);
 
       while (true) {
         const noLongerTrackedByClient = this._objectPool.objectInfosToDelete(clientToken);
@@ -501,11 +426,26 @@ export class ObjectSync {
           break;
         }
         for (const objectInfo of noLongerTrackedByClient) {
-          objectInfo.serializer.onClientConnectionRemoved(clientToken);
+          if (this._settings.memoryManagementMode === "byClient") {
+            objectInfo.serializer.onClientRemoved(clientToken);
+            generatedMessages.push({
+              type: "delete",
+              objectId: objectInfo.objectId,
+            });
+          } else {
+            this._weakObjectPool!.add(objectInfo);
+            this._objectPool.deleteById(objectInfo.objectId);
+          }
+        }
+      }
+
+      for (const pendingWeakDelete of this._pendingWeakDeletes) {
+        if (pendingWeakDelete.clients.has(clientToken)) {
           generatedMessages.push({
             type: "delete",
-            objectId: objectInfo.objectId,
+            objectId: pendingWeakDelete.objectId,
           });
+          pendingWeakDelete.clients.delete(clientToken);
         }
       }
 

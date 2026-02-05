@@ -1,7 +1,8 @@
-import { TypeSerializerConstructor } from "../serialization/serializer.js";
+import { TypeSerializerConstructor } from "../serialization/serializedTypes.js";
 import { Message } from "../shared/messages.js";
 import { Constructor } from "../shared/types.js";
-import { ObjectIdGeneratorSettings, ObjectSync } from "./objectSync.js";
+import { ObjectSync } from "./objectSync.js";
+import { ObjectIdGeneratorSettings } from "./types.js";
 
 export type StandaloneSerializationSettings = {
   /**
@@ -17,8 +18,8 @@ export type StandaloneSerializationSettings = {
   /**
    * Type serializers to use for serializing and deserializing property values during synchronization.
    * Can either be provided as an array of type serializers or constructors of SyncObject types.
-   * When constructors are provided, the corresponding internal SyncObjectSerializer will be used.
-   * When not provided, all registered SyncObject types will be used.
+   * When constructors are provided, the corresponding internal TypeSerializer will be used.
+   * When not provided, all registered types and serializers will be used.
    */
   serializers?: (TypeSerializerConstructor | Constructor)[];
 

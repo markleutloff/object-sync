@@ -1,6 +1,6 @@
 {
   "name": "simple-object-sync",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "repository": {
     "url": "https://github.com/markleutloff/object-sync"
@@ -31,14 +31,18 @@
     "test:ts:array.changeSet": "tsx --test tests/ts/array.changeSet.test.ts",
     "test:ts:basics": "tsx --test tests/ts/basics.test.ts",
     "test:ts:serializer": "tsx --test tests/ts/serializer.*.test.ts",
+    "test:ts:serializer.error": "tsx --test tests/ts/serializer.error.test.ts",
     "test:ts:serializer.map": "tsx --test tests/ts/serializer.map.test.ts",
+    "test:ts:serializer.syncableMap": "tsx --test tests/ts/serializer.syncableMap.test.ts",
     "test:ts:serializer.set": "tsx --test tests/ts/serializer.set.test.ts",
+    "test:ts:serializer.syncableSet": "tsx --test tests/ts/serializer.syncableSet.test.ts",
     "test:ts:serializer.object": "tsx --test tests/ts/serializer.object.test.ts",
     "test:ts:serializer.syncObject": "tsx --test tests/ts/serializer.syncObject.test.ts",
     "test:ts:serializer.array": "tsx --test tests/ts/serializer.array.test.ts",
     "test:ts:serializer.syncableArray": "tsx --test tests/ts/serializer.syncableArray.test.ts",
     "test:ts:serializer.syncableObservableArray": "tsx --test tests/ts/serializer.syncableObservableArray.test.ts",
     "test:ts:simpleSerialization": "tsx --test tests/ts/simpleSerialization.test.ts",
+    "test:ts:memoryManagement": "tsx --test tests/ts/memoryManagement.test.ts",
     "test:ts:objectSync": "tsx --test tests/ts/objectSync.test.ts",
     "test:ts:multiClient": "tsx --test tests/ts/multiClient.test.ts",
     "test:ts:worker": "tsx --test tests/ts/worker/worker.test.ts",

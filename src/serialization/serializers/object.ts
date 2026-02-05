@@ -18,13 +18,15 @@ export class ObjectSerializer extends ExtendedTypeSerializer<TInstance, TPayload
 
   constructor(objectInfo: ObjectInfo<TInstance>) {
     super(objectInfo);
+  }
 
-    if (objectInfo.instance) {
-      for (const key of Object.keys(objectInfo.instance)) {
-        const value = (objectInfo.instance as any)[key];
-        this.storeReference(value);
-      }
-    }
+  override onInstanceSet(createdByCreateObjectMessage: boolean): void {
+    super.onInstanceSet(createdByCreateObjectMessage);
+
+    //  for (const key of Object.keys(objectInfo.instance)) {
+    //     const value = (objectInfo.instance as any)[key];
+    //     this.storeReferenceBySettings({ value });
+    //   }
   }
 
   getTypeId(clientToken: ClientToken) {
@@ -42,25 +44,25 @@ export class ObjectSerializer extends ExtendedTypeSerializer<TInstance, TPayload
     }
   }
 
-  generateMessages(clientToken: ClientToken, isNewClientConnection: boolean): Message[] {
-    if (!isNewClientConnection && !this.hasPendingChanges) return [];
+  generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
+    if (!isNewClient && !this.hasPendingChanges) return [];
 
     const message: CreateObjectMessage<TPayload> | ChangeObjectMessage<TPayload> = {
-      type: isNewClientConnection ? "create" : "change",
+      type: isNewClient ? "create" : "change",
       objectId: this.objectId,
-      typeId: (isNewClientConnection ? TYPE_ID : undefined) as any,
+      typeId: (isNewClient ? TYPE_ID : undefined) as any,
       data: this.getSerializedData(clientToken),
     };
     return [message];
   }
 
   private getSerializedData(clientToken: ClientToken) {
-    this.clearAllStoredReferencesWithClientConnection(clientToken);
+    this.clearStoredReferencesWithClientToken(clientToken);
 
     const data: Record<string, any> = {};
     for (const key of Object.keys(this.instance)) {
       const value = (this.instance as any)[key];
-      this.storeReference(value, key, clientToken);
+      this.storeReference({ value, key, clientToken });
       const mappedValue = this.serializeValue(value, clientToken);
       data[key] = mappedValue;
     }

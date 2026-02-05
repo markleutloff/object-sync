@@ -2,8 +2,9 @@ import { describe, it, beforeEach } from "node:test";
 import { ObjectSync, ClientToken, Message } from "../../src/index.js";
 import { assertObjectsEqual } from "./utils.js";
 import assert from "assert";
+import { IMapDispatcher } from "../../src/serialization/index.js";
 
-describe("Object Serializer", () => {
+describe("Map Serializer", () => {
   let sourceSync: ObjectSync;
   let destSync: ObjectSync;
   let sourceObject: Map<any, any>;
@@ -13,6 +14,7 @@ describe("Object Serializer", () => {
   const sendDataToDest = async (messages?: Message[]) => {
     messages ??= sourceSync.getMessages(sourceSyncDestClientToken);
     await destSync.applyMessagesAsync(messages, destSyncDestClientToken);
+    return messages;
   };
 
   beforeEach(() => {
@@ -51,5 +53,30 @@ describe("Object Serializer", () => {
     await sendDataToDest();
 
     assert(destSync.allTrackedObjects.length === 0);
+  });
+
+  it("should send reported changes", async () => {
+    await sendDataToDest();
+
+    const destObject = destSync.findOne<Map<any, any>>(Map, "main")!;
+    assert(destObject.size !== 0);
+
+    const mapDispatcher = sourceSync.getDispatcher<IMapDispatcher>(sourceObject)!;
+    mapDispatcher.reportChange("key3", "newValue");
+    mapDispatcher.reportChange("key1", "newValue");
+    await sendDataToDest();
+
+    assert(destObject.get("key1") === "newValue");
+    assert(destObject.get("key3") === "newValue");
+
+    mapDispatcher.reportDelete("key1");
+    const m = await sendDataToDest();
+
+    assert(!destObject.has("key1"));
+
+    mapDispatcher.reportClear();
+    await sendDataToDest();
+
+    assert(destObject.size === 0);
   });
 });

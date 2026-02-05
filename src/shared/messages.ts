@@ -1,3 +1,5 @@
+import { SerializedValue } from "../serialization/serializedTypes.js";
+
 export const isPropertyInfoSymbol = Symbol("isPropertyInfo");
 
 export type PropertyInfo<T extends object, TKey extends keyof T> = {
@@ -45,7 +47,7 @@ export type ExecuteObjectMessage<TInstance extends object = any, TMethodName ext
   type: typeof ExecuteMessageType;
   id: unknown;
   method: TMethodName;
-  parameters: TInstance[TMethodName] extends (...args: infer TArguments) => any ? TArguments : never;
+  parameters: SerializedValue[];
 };
 
 export type ExecuteFinishedObjectMessage = Message & {

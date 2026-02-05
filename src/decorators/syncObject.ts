@@ -6,6 +6,8 @@ import { ClientToken } from "../shared/clientToken.js";
 import { nothing } from "./base.js";
 import { TrackedMethodInfo, TrackedMethodSettings } from "./syncMethod.js";
 import { TrackedPropertyInfo, TrackedPropertySettings } from "./syncProperty.js";
+import { getTypeSerializerClass } from "../serialization/utils.js";
+import { defaultSerializersOrTypes } from "../serialization/index.js";
 
 const TRACKABLE_CONSTRUCTOR_INFO = Symbol("trackableConstructor");
 
@@ -57,8 +59,8 @@ export type ClientTypeIdFunctionPayload<T extends object> = {
   constructor: Constructor<T>;
   // The current typeId of the object which will be send
   typeId: string;
-  // The client connection to which the object is being sent.
-  destinationClientConnection: ClientToken;
+  // The client token to which the object is being sent.
+  destinationClientToken: ClientToken;
 };
 
 type TrackableObjectSettings<T extends object> = {
@@ -126,6 +128,8 @@ export function syncObject<This extends abstract new (...args: any) => any>(sett
     }
 
     allSyncObjectTypes.add(target as any);
+
+    defaultSerializersOrTypes.push(target as any);
   };
 }
 
@@ -154,7 +158,7 @@ export function getTrackableTypeInfo<T extends object = any>(ctor: Constructor<T
   return trackableInfo ?? null;
 }
 
-export function beforeSendObjectToClient(constructor: Constructor, instance: object, typeId: string, destinationClientConnection: ClientToken) {
+export function beforeSendObjectToClient(constructor: Constructor, instance: object, typeId: string, destinationClientToken: ClientToken) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return nothing;
@@ -176,7 +180,7 @@ export function beforeSendObjectToClient(constructor: Constructor, instance: obj
     return newConstructorInfo.typeId;
   }
 
-  const result = (constructorInfo.clientTypeId as any).call(instance, { instance, constructor, typeId, destinationClientConnection });
+  const result = (constructorInfo.clientTypeId as any).call(instance, { instance, constructor, typeId, destinationClientToken });
   if (result === null || result === undefined || result === nothing) {
     return nothing;
   }

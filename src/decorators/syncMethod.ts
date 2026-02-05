@@ -13,7 +13,7 @@ export type BeforeExecuteOnClientPayload<T extends object, TKey extends keyof T 
   // The arguments being passed to the method. These can be modified.
   args: T[TKey] extends (...args: infer P) => any ? P : never;
   // The client connection to which the method execution is being sent.
-  destinationClientConnection: ClientToken;
+  destinationClientToken: ClientToken;
 };
 
 export type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBase<T> & {
@@ -65,7 +65,7 @@ export function syncMethod<This extends object, Return>(settings?: TrackedMethod
   };
 }
 
-export function beforeExecuteOnClient(constructor: Constructor, instance: object, methodKey: string, args: any[], destinationClientConnection: ClientToken) {
+export function beforeExecuteOnClient(constructor: Constructor, instance: object, methodKey: string, args: any[], destinationClientToken: ClientToken) {
   const constructorInfo = getTrackableTypeInfo(constructor);
   if (!constructorInfo) {
     return false;
@@ -74,7 +74,7 @@ export function beforeExecuteOnClient(constructor: Constructor, instance: object
   if (!methodInfo || methodInfo.mode === "none" || methodInfo.mode === "applyOnly") {
     return false;
   }
-  if (methodInfo.beforeExecuteOnClient?.call(instance, { instance, key: methodKey, args, destinationClientConnection }) === false) {
+  if (methodInfo.beforeExecuteOnClient?.call(instance, { instance, key: methodKey, args, destinationClientToken }) === false) {
     return false;
   }
   return true;

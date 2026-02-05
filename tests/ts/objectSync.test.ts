@@ -1,4 +1,4 @@
-import { syncMethod, syncObject, syncProperty, ClientToken, ObjectSync, nothing, MakeSimpleTypeSerializer, ObjectSyncSettings, allSyncObjectTypes } from "../../src/index.js";
+import { syncMethod, syncObject, syncProperty, ClientToken, ObjectSync, nothing, createSimpleTypeSerializerClass, ObjectSyncSettings, defaultSerializersOrTypes } from "../../src/index.js";
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
 
@@ -15,8 +15,8 @@ class Root {
   allowValueMutation = false;
 
   @syncProperty({
-    beforeSendToClient({ instance, key, value, destinationClientConnection }) {
-      if (destinationClientConnection.identity === "host") {
+    beforeSendToClient({ instance, key, value, destinationClientToken }) {
+      if (destinationClientToken.identity === "host") {
         return nothing;
       }
       if (instance.allowValueMutation && key === "value") {
@@ -24,8 +24,8 @@ class Root {
       }
       return value;
     },
-    canApply({ sourceClientConnection }) {
-      if (sourceClientConnection.identity === "host") {
+    canApply({ sourceClientToken }) {
+      if (sourceClientToken.identity === "host") {
         return true;
       }
       return false;
@@ -92,13 +92,13 @@ class SerializableClass {
 describe("ObjectSync client-host integration (objectSync)", () => {
   let hostObjectSync: ObjectSync;
   let clientObjectSync: ObjectSync;
-  let clientObjectSyncClientConnection: ClientToken;
-  let hostObjectSyncClientConnection: ClientToken;
+  let clientObjectSyncClientToken: ClientToken;
+  let hostObjectSyncClientToken: ClientToken;
 
   let hostRoot: Root;
 
   beforeEach(() => {
-    const SerializableClassSerializer = MakeSimpleTypeSerializer<SerializableClass, number>({
+    const SerializableClassSerializer = createSimpleTypeSerializerClass<SerializableClass, number>({
       typeId: "SerializableClass",
       type: SerializableClass,
       serialize: (obj: SerializableClass) => obj.value,
@@ -106,7 +106,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     });
     const hostSettings: ObjectSyncSettings = {
       identity: "host",
-      serializers: [SerializableClassSerializer, ...allSyncObjectTypes],
+      serializers: [SerializableClassSerializer, ...defaultSerializersOrTypes],
     };
 
     const clientSettings: ObjectSyncSettings = {
@@ -117,19 +117,19 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     hostObjectSync = new ObjectSync(hostSettings);
     clientObjectSync = new ObjectSync(clientSettings);
 
-    clientObjectSyncClientConnection = hostObjectSync.registerClient({ identity: "client" });
-    hostObjectSyncClientConnection = clientObjectSync.registerClient({ identity: "host" });
+    clientObjectSyncClientToken = hostObjectSync.registerClient({ identity: "client" });
+    hostObjectSyncClientToken = clientObjectSync.registerClient({ identity: "host" });
 
     hostRoot = new Root();
     hostObjectSync.track(hostRoot);
   });
 
   const exchangeMessagesAsync = async () => {
-    const messagesFromHost = hostObjectSync.getMessages(clientObjectSyncClientConnection);
-    await clientObjectSync.applyMessagesAsync(messagesFromHost, hostObjectSyncClientConnection);
+    const messagesFromHost = hostObjectSync.getMessages(clientObjectSyncClientToken);
+    await clientObjectSync.applyMessagesAsync(messagesFromHost, hostObjectSyncClientToken);
 
-    const messagesFromClient = clientObjectSync.getMessages(hostObjectSyncClientConnection);
-    await hostObjectSync.applyMessagesAsync(messagesFromClient, clientObjectSyncClientConnection);
+    const messagesFromClient = clientObjectSync.getMessages(hostObjectSyncClientToken);
+    await hostObjectSync.applyMessagesAsync(messagesFromClient, clientObjectSyncClientToken);
   };
 
   it("should report creation to client", async () => {
@@ -223,7 +223,7 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     // Calling the host method
     const hostResult = await hostRoot.invoke(invokeArgument);
     // Enqueue the client method call
-    const clientResultPromise = hostObjectSync.getDispatcher(hostRoot)!.invoke(clientObjectSyncClientConnection, "invoke", invokeArgument);
+    const clientResultPromise = hostObjectSync.getDispatcher(hostRoot)!.invoke(clientObjectSyncClientToken, "invoke", invokeArgument);
 
     await exchangeMessagesAsync();
     const clientResult = await clientResultPromise;

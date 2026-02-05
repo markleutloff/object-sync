@@ -24,10 +24,10 @@ export function isForClientToken(clientToken: ClientToken, filter: ClientTokenFi
     hasDesignation = hasInIterable(filter.identities!, clientToken.identity);
   }
 
-  let hasClientConnection = filter.clientTokens === undefined;
-  if (!hasClientConnection) {
-    hasClientConnection = hasInIterable(filter.clientTokens!, clientToken);
+  let hasClientToken = filter.clientTokens === undefined;
+  if (!hasClientToken) {
+    hasClientToken = hasInIterable(filter.clientTokens!, clientToken);
   }
 
-  return filter.isExclusive === (hasDesignation && hasClientConnection);
+  return filter.isExclusive === (hasDesignation && hasClientToken);
 }

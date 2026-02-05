@@ -2,17 +2,19 @@ import { describe, it, beforeEach } from "node:test";
 import { ObjectSync, ClientToken, Message } from "../../src/index.js";
 import { assertObjectsEqual } from "./utils.js";
 import assert from "assert";
+import { SyncableMap } from "../../src/serialization/index.js";
 
-describe("Set Serializer", () => {
+describe("SyncableMap Serializer", () => {
   let sourceSync: ObjectSync;
   let destSync: ObjectSync;
-  let sourceObject: Set<any>;
+  let sourceObject: Map<any, any>;
   let sourceSyncDestClientToken: ClientToken;
   let destSyncDestClientToken: ClientToken;
 
   const sendDataToDest = async (messages?: Message[]) => {
     messages ??= sourceSync.getMessages(sourceSyncDestClientToken);
     await destSync.applyMessagesAsync(messages, destSyncDestClientToken);
+    return messages;
   };
 
   beforeEach(() => {
@@ -25,18 +27,19 @@ describe("Set Serializer", () => {
     });
     destSyncDestClientToken = destSync.registerClient({ identity: "source" });
 
-    sourceObject = new Set();
-    sourceObject.add("value1");
-    sourceObject.add(42);
-    sourceObject.add(true);
-    sourceObject.add(new Set(["innerValue"]));
+    sourceObject = new SyncableMap();
+    sourceObject.set("key1", "value1");
+    sourceObject.set("key2", 42);
+    sourceObject.set(10, true);
+    sourceObject.set(10, new Map([["innerKey", "innerValue"]]));
+
     sourceSync.track(sourceObject, "main");
   });
 
   it("should transfer initial data", async () => {
     await sendDataToDest();
 
-    const destObject = destSync.findOne<Set<any>>(Set, "main")!;
+    const destObject = destSync.findOne<Map<any, any>>(Map, "main")!;
 
     assert(Boolean(destObject));
     assertObjectsEqual(sourceObject, destObject);
@@ -50,5 +53,29 @@ describe("Set Serializer", () => {
     await sendDataToDest();
 
     assert(destSync.allTrackedObjects.length === 0);
+  });
+
+  it("should send reported changes", async () => {
+    await sendDataToDest();
+
+    const destObject = destSync.findOne<Map<any, any>>(Map, "main")!;
+    assert(destObject.size !== 0);
+
+    sourceObject.set("key3", "newValue");
+    sourceObject.set("key1", "newValue");
+    await sendDataToDest();
+
+    assert(destObject.get("key1") === "newValue");
+    assert(destObject.get("key3") === "newValue");
+
+    sourceObject.delete("key1");
+    const m = await sendDataToDest();
+
+    assert(!destObject.has("key1"));
+
+    sourceObject.clear();
+    await sendDataToDest();
+
+    assert(destObject.size === 0);
   });
 });

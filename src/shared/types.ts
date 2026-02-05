@@ -60,7 +60,7 @@ export function hasInIterable<T>(input: OneOrMany<T>, expected: T): boolean {
 }
 
 export type Constructor<T = any> = { new (...args: any[]): T };
-
+export type AbstractConstructor<T = any> = abstract new (...args: any[]) => T;
 export function isPrimitiveValue(value: any): boolean {
   return value === undefined || value === null || (typeof value !== "object" && typeof value !== "function");
 }

@@ -1,17 +1,38 @@
-import { ChangeObjectMessage, CreateObjectMessage, Message } from "../shared/messages";
+import { ChangeObjectMessage, CreateObjectMessage, Message } from "../shared/messages.js";
 import { ObjectInfo, StoredReference } from "../shared/objectInfo.js";
 import { Constructor, isPrimitiveValue } from "../shared/types.js";
 import { ClientToken } from "../shared/clientToken.js";
+import { getSerializerSymbol, SerializedValue, TypeSerializerConstructor } from "./serializedTypes.js";
+import { defaultSerializersOrTypes } from "./serializers/base.js";
 
-export type TypeSerializerConstructor<TTypeSerializer extends TypeSerializer = TypeSerializer, TInstance extends object = any> = {
-  new (objectInfo: ObjectInfo<TInstance>): TTypeSerializer;
+type ReferenceStorageSettings = {
+  /**
+   * The key associated with the stored reference.
+   */
+  key?: any;
 
-  canSerialize(instanceOrTypeId: object | string): boolean;
-};
+  /**
+   * The client connection for which to store the reference.
+   */
+  clientToken?: ClientToken;
+} & (
+  | {
+      /**
+       * The value to store a reference for.
+       */
+      value: any;
+    }
+  | {
+      /**
+       * The values to store references for.
+       */
+      values: any[];
+    }
+);
 
 export abstract class TypeSerializer<TInstance extends object = object> {
   static canSerialize(instanceOrTypeId: object | string): boolean {
-    throw new Error("Not implemented");
+    throw new Error(`Not implemented in type serializer ${this.name}`);
   }
 
   private readonly _clients: Set<ClientToken> = new Set();
@@ -71,7 +92,7 @@ export abstract class TypeSerializer<TInstance extends object = object> {
    * Called when a client connection is removed to allow the serializer to clean up any references related to the client connection.
    * @param clientToken The client connection being removed.
    */
-  onClientConnectionRemoved(clientToken: ClientToken) {
+  onClientRemoved(clientToken: ClientToken) {
     this._clients.delete(clientToken);
 
     this._storedReferencesByKey.forEach((storedReferencesByClient, key) => {
@@ -99,24 +120,24 @@ export abstract class TypeSerializer<TInstance extends object = object> {
   /**
    * Serializes a value (basically converts any reference values to ObjectReferences).
    */
-  protected serializeValue(value: any, clientToken: ClientToken) {
+  protected serializeValue(value: any, clientToken: ClientToken): SerializedValue {
     return this._objectInfo.owner.serializeValue(value, clientToken);
   }
 
   /**
    * Deserializes a value (basically converts any ObjectReferences to actual object references).
    */
-  protected deserializeValue(value: any, clientToken: ClientToken) {
+  protected deserializeValue(value: SerializedValue, clientToken: ClientToken) {
     return this._objectInfo.owner.deserializeValue(value, clientToken);
   }
 
   /**
-   * Generates messages to be sent to the client connection.
-   * @param clientToken The client connection for which to generate messages.
-   * @param isNewClientConnection Whether the client connection is new (ie: just connected).
+   * Generates messages to be sent to the client.
+   * @param clientToken The client token for which to generate messages.
+   * @param isNewClient Whether the client is new (ie: just connected).
    * @returns An array of messages to be sent to the client connection.
    */
-  abstract generateMessages(clientToken: ClientToken, isNewClientConnection: boolean): Message[];
+  abstract generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[];
 
   /**
    * Applies a message to the serializer.
@@ -129,47 +150,55 @@ export abstract class TypeSerializer<TInstance extends object = object> {
 
   /**
    * Stores a reference to an object which will be used to keep track of references for serialization purposes.
-   * @param value The reference to store. When a primitive value is provided, no reference is stored but a dummy StoredReference is returned.
+   * @param settings The settings for storing the reference.
    * @returns A StoredReference which can be used to dispose the stored reference.
    */
-  protected storeReference(value: any): StoredReference;
-
-  /**
-   * Stores a reference to an object which will be used to keep track of references for serialization purposes.
-   * @param value The reference to store. When a primitive value is provided, no reference is stored but a dummy StoredReference is returned.
-   * @param clientToken The client connection for which the reference is stored.
-   * @returns A StoredReference which can be used to dispose the stored reference.
-   */
-  protected storeReference(value: any, clientToken: ClientToken): StoredReference;
-
-  /**
-   * Stores a reference to an object which will be used to keep track of references for serialization purposes.
-   * @param value The reference to store. When a primitive value is provided, no reference is stored but a dummy StoredReference is returned.
-   * @param key The key associated with the stored reference.
-   * @returns A StoredReference which can be used to dispose the stored reference.
-   */
-  protected storeReference(value: any, key: number | string | symbol): StoredReference;
-  /**
-   * Stores a reference to an object which will be used to keep track of references for serialization purposes.
-   * @param value The reference to store. When a primitive value is provided, no reference is stored but a dummy StoredReference is returned.
-   * @param key The key associated with the stored reference.
-   * @param clientToken The client connection for which the reference is stored.
-   * @returns A StoredReference which can be used to dispose the stored reference.
-   */
-  protected storeReference(value: any, key: number | string | symbol, clientToken: ClientToken): StoredReference;
-
-  protected storeReference(value: any, clientConnectionOrKey?: ClientToken | number | string | symbol, clientToken?: ClientToken): StoredReference {
-    let key: number | string | symbol | undefined = undefined;
-    if (clientConnectionOrKey && typeof clientConnectionOrKey === "object") {
-      clientToken = clientConnectionOrKey as ClientToken;
-    } else if (clientConnectionOrKey !== undefined) {
-      key = clientConnectionOrKey;
+  protected storeReference(settings: ReferenceStorageSettings): StoredReference {
+    let storedReferencesByClient = this._storedReferencesByKey.get(settings.key);
+    if (!storedReferencesByClient) {
+      storedReferencesByClient = new Map();
+      this._storedReferencesByKey.set(settings.key, storedReferencesByClient);
     }
 
-    return this.storeReferenceInternal(value, clientToken, key);
+    const previousStoredReference = storedReferencesByClient.get(settings.clientToken);
+    previousStoredReference?.dispose();
+
+    const disposables: StoredReference[] = [];
+
+    const values = "value" in settings ? [settings.value] : settings.values;
+
+    for (const value of values) {
+      if (isPrimitiveValue(value)) continue;
+
+      const storedReference = this._objectInfo.owner.trackInternal(value)!.addReference(settings.clientToken);
+      disposables.push(storedReference);
+    }
+
+    if (disposables.length === 0) {
+      return {
+        dispose() {},
+      };
+    }
+
+    let isDisposed = false;
+    const finalStoredReference = {
+      dispose: () => {
+        if (isDisposed) return;
+        isDisposed = true;
+        for (const disposable of disposables) {
+          disposable.dispose();
+        }
+        storedReferencesByClient.delete(settings.clientToken);
+        if (storedReferencesByClient.size === 0) {
+          this._storedReferencesByKey.delete(settings.key);
+        }
+      },
+    };
+    storedReferencesByClient.set(settings.clientToken, finalStoredReference);
+    return finalStoredReference;
   }
 
-  protected clearAllStoredReferencesWithKey(key: number | string | symbol): void {
+  protected clearStoredReferencesWithKey(key: any): void {
     const storedReferencesByClient = this._storedReferencesByKey.get(key);
     if (storedReferencesByClient) {
       storedReferencesByClient.forEach((storedReference) => {
@@ -178,45 +207,11 @@ export abstract class TypeSerializer<TInstance extends object = object> {
     }
   }
 
-  protected clearAllStoredReferencesWithClientConnection(clientToken: ClientToken): void {
-    this._storedReferencesByKey.forEach((storedReferencesByClient, key) => {
+  protected clearStoredReferencesWithClientToken(clientToken: ClientToken): void {
+    this._storedReferencesByKey.forEach((storedReferencesByClient) => {
       const storedReference = storedReferencesByClient.get(clientToken);
       storedReference?.dispose();
     });
-  }
-
-  private storeReferenceInternal(value: any, clientToken: ClientToken | undefined, key: number | string | symbol | undefined): StoredReference {
-    let storedReferencesByClient = this._storedReferencesByKey.get(key);
-    if (!storedReferencesByClient) {
-      storedReferencesByClient = new Map();
-      this._storedReferencesByKey.set(key, storedReferencesByClient);
-    }
-
-    const previousStoredReference = storedReferencesByClient.get(clientToken);
-    previousStoredReference?.dispose();
-
-    if (isPrimitiveValue(value)) {
-      return {
-        dispose() {},
-      };
-    }
-
-    const storedReference = this._objectInfo.owner.trackInternal(value)!.addReference(clientToken);
-
-    let isDisposed = false;
-    const finalStoredReference = {
-      dispose: () => {
-        if (isDisposed) return;
-        isDisposed = true;
-        storedReference.dispose();
-        storedReferencesByClient.delete(clientToken);
-        if (storedReferencesByClient.size === 0) {
-          this._storedReferencesByKey.delete(key);
-        }
-      },
-    };
-    storedReferencesByClient.set(clientToken, finalStoredReference);
-    return finalStoredReference;
   }
 
   get dispatcher(): any {
@@ -224,13 +219,13 @@ export abstract class TypeSerializer<TInstance extends object = object> {
   }
 }
 
-export abstract class ExtendedTypeSerializer<TInstance extends object = object, TPayload extends object = any> extends TypeSerializer<TInstance> {
+export abstract class ExtendedTypeSerializer<TInstance extends object = object, TCreatePayload extends object = any, TChangePayload extends object = TCreatePayload> extends TypeSerializer<TInstance> {
   private readonly _messageTypeToHandler: Map<string, (message: Message, clientToken: ClientToken) => void | Promise<void>> = new Map();
 
   constructor(objectInfo: ObjectInfo<TInstance>) {
     super(objectInfo);
-    this.registerMessageHandler<CreateObjectMessage<TPayload>>("create", (message, clientToken) => this.onCreateMessageReceived(message, clientToken));
-    this.registerMessageHandler<ChangeObjectMessage<TPayload>>("change", (message, clientToken) => this.onChangeMessageReceived(message, clientToken));
+    this.registerMessageHandler<CreateObjectMessage<TCreatePayload>>("create", (message, clientToken) => this.onCreateMessageReceived(message, clientToken));
+    this.registerMessageHandler<ChangeObjectMessage<TChangePayload>>("change", (message, clientToken) => this.onChangeMessageReceived(message, clientToken));
   }
 
   protected registerMessageHandler<TMessage extends Message>(messageType: string, handler: (message: TMessage, clientToken: ClientToken) => void | Promise<void>) {
@@ -246,9 +241,9 @@ export abstract class ExtendedTypeSerializer<TInstance extends object = object, 
     }
   }
 
-  abstract onCreateMessageReceived(message: CreateObjectMessage<TPayload>, clientToken: ClientToken): void;
+  abstract onCreateMessageReceived(message: CreateObjectMessage<TCreatePayload>, clientToken: ClientToken): void;
 
-  onChangeMessageReceived(message: ChangeObjectMessage<TPayload>, clientToken: ClientToken): void {
+  onChangeMessageReceived(message: ChangeObjectMessage<TChangePayload>, clientToken: ClientToken): void {
     // Default implementation does nothing
   }
 }
@@ -260,10 +255,10 @@ type SimpleTypeSerializerSettings<TInstance extends object, TPayload = any> = {
   deserialize: (data: TPayload) => TInstance;
 };
 
-export function MakeSimpleTypeSerializer<TInstance extends object, TPayload = any>(settings: SimpleTypeSerializerSettings<TInstance, TPayload>): TypeSerializerConstructor {
+export function createSimpleTypeSerializerClass<TInstance extends object, TPayload = any>(settings: SimpleTypeSerializerSettings<TInstance, TPayload>): TypeSerializerConstructor {
   const { type, typeId, serialize, deserialize } = settings;
 
-  return class SimpleTypeSerializer extends ExtendedTypeSerializer<TInstance> {
+  const result = class SimpleTypeSerializer extends ExtendedTypeSerializer<TInstance> {
     static override canSerialize(instanceOrTypeId: object | string): boolean {
       if (typeof instanceOrTypeId === "string") {
         return instanceOrTypeId === typeId;
@@ -272,13 +267,13 @@ export function MakeSimpleTypeSerializer<TInstance extends object, TPayload = an
       }
     }
 
-    override getTypeId(_clientConnection: ClientToken): string | null {
+    override getTypeId(clientToken: ClientToken): string | null {
       return typeId;
     }
 
-    override generateMessages(_clientConnection: ClientToken, isNewClientConnection: boolean): Message[] {
+    override generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
       const messages: Message[] = [];
-      if (isNewClientConnection) {
+      if (isNewClient) {
         messages.push({
           type: "create",
           objectId: this.objectId,
@@ -293,4 +288,16 @@ export function MakeSimpleTypeSerializer<TInstance extends object, TPayload = an
       this.instance = deserialize(message.data as TPayload);
     }
   };
+
+  defaultSerializersOrTypes.push(result);
+
+  // Add the getSerializer static property getter to the constructor type
+  Object.defineProperty(type, getSerializerSymbol, {
+    value: () => result,
+    writable: true,
+    configurable: false,
+    enumerable: false,
+  });
+
+  return result;
 }

@@ -1,29 +1,28 @@
-import { ObjectSync, SyncableObservableArray, ClientToken, syncObject, Message } from "../../src/index.js";
+import { ObjectSync, SyncableObservableArray, ClientToken, syncObject, Message, ObjectSyncSettings, SyncableObservableArraySerializer } from "../../src/index.js";
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
-import { ObservableArray } from "../../src/serialization/serializers/syncArray/syncObservableArray.js";
 
 @syncObject({ typeId: "Beta" })
 class Beta {}
 
-describe("ObjectSync client-host integration (SyncableArray)", () => {
+describe("SyncableObservableArray Serializer", () => {
   let sourceSync: ObjectSync;
   let destSync: ObjectSync;
   let sourceSyncDestClientToken: ClientToken;
   let destSyncDestClientToken: ClientToken;
 
-  let alpha: ObservableArray<string>;
-  let alphaClient: ObservableArray<string>;
+  let alpha: SyncableObservableArray<string>;
+  let alphaClient: SyncableObservableArray<string>;
 
   beforeEach(async () => {
-    const hostSettings = {
+    const hostSettings: ObjectSyncSettings = {
       identity: "host",
-      typeGenerators: [],
+      serializers: [Beta, SyncableObservableArraySerializer],
     };
 
-    const clientSettings = {
+    const clientSettings: ObjectSyncSettings = {
       identity: "client",
-      typeGenerators: [Beta, SyncableObservableArray],
+      serializers: [Beta, SyncableObservableArraySerializer],
     };
 
     sourceSync = new ObjectSync(hostSettings);

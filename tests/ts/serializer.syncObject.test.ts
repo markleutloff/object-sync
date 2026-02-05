@@ -77,7 +77,7 @@ class Gamma1 extends Gamma0 {}
 })
 class Gamma2 extends Gamma0 {}
 
-describe("Object Serializer", () => {
+describe("SyncObject Serializer", () => {
   let sourceSync: ObjectSync;
   let destSync: ObjectSync;
   let sourceObject: Alpha;

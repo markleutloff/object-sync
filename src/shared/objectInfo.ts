@@ -1,5 +1,5 @@
 import { ClientTokenFilter, isForClientToken } from "../objectSync/clientFilter.js";
-import { TypeSerializer, TypeSerializerConstructor } from "../serialization/serializer.js";
+import { TypeSerializer } from "../serialization/serializer.js";
 import { ObjectSync } from "../objectSync/objectSync.js";
 import { ClientToken } from "../shared/clientToken.js";
 import { toIterable } from "./types.js";
@@ -51,6 +51,7 @@ export class ObjectInfo<TInstance extends object = object> {
     return this._instance!;
   }
   set instance(value: TInstance) {
+    if (value === this._instance) return;
     if (this._instance) throw new Error("Instance is already set and cannot be changed.");
     this._instance = value;
     this._owner.reportInstanceCreated(value, this._objectId);

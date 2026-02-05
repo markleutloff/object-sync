@@ -7,8 +7,8 @@ export class Root {
 
   @syncMethod({
     promiseHandlingType: "await",
-    beforeExecuteOnClient({ instance, key, args, destinationClientConnection }) {
-      args[0] = args[0] + destinationClientConnection.identity;
+    beforeExecuteOnClient({ instance, key, args, destinationClientToken }) {
+      args[0] = args[0] + destinationClientToken.identity;
       return true;
     },
   })

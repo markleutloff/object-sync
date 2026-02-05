@@ -1,14 +1,20 @@
 import { ChangeObjectMessage, CreateObjectMessage, Message } from "../../../shared/messages.js";
 import { ExtendedTypeSerializer } from "../../serializer.js";
-import { defaultIntrinsicSerializers } from "../base.js";
+import { createSerializerClass } from "../base.js";
 import { ClientToken } from "../../../shared/clientToken.js";
-import { ensureSyncArrayMetaInfo } from "./metaInfo.js";
-import { SyncableArray } from "./syncArray.js";
-import { SyncableObservableArray } from "./syncObservableArray.js";
+import { SyncArrayMetaInfo } from "./metaInfo.js";
+import { getMetaInfo } from "../../../shared/metaInfo.js";
+import { SyncableArray } from "./syncableArray.js";
+import { SyncableObservableArray } from "./syncableObservableArray.js";
 import { SpliceInstruction, applyChangeSet, createChangeSet } from "./changeSet.js";
+import { ObjectInfo, SerializedValue } from "../../../index.js";
+import { Constructor } from "../../../shared/types.js";
 
 type TInstance = Array<any>;
-type TCreatePayload = any[];
+type TCreatePayload = SerializedValue[];
+type TChangePayload = SpliceInstruction<SerializedValue>[];
+type ChangeEntry = SpliceInstruction<any>;
+
 const TYPE_ID_NATIVEARRAY = "<nativeArray>";
 const TYPE_ID_SYNCARRAY = "<syncArray>";
 const TYPE_ID_OBSERVABLEARRAY = "<syncObservableArray>";
@@ -36,17 +42,29 @@ export interface ISyncArrayDispatcher<TElement = any> {
   changeSetMode: "trackSplices" | "compareStates";
 }
 
-abstract class SyncArraySerializerBase extends ExtendedTypeSerializer<TInstance> {
+abstract class SyncableArraySerializerBase extends ExtendedTypeSerializer<TInstance, TCreatePayload, TChangePayload> {
   private _oldArrayContent: any[] = [];
-  private _temporaryChanges: SpliceInstruction<any>[] | null = null;
+  private _temporaryChanges: ChangeEntry[] | null = null;
   private _dispatcher: ISyncArrayDispatcher | undefined;
   private _changeSetMode?: "trackSplices" | "compareStates";
+
+  constructor(
+    private readonly _arrayType: Constructor<TInstance>,
+    private readonly _typeId: string,
+    objectInfo: ObjectInfo<TInstance>,
+  ) {
+    super(objectInfo);
+  }
+
+  getTypeId(clientToken: ClientToken) {
+    return this._typeId;
+  }
 
   public override onInstanceSet(createdByCreateObjectMessage: boolean): void {
     super.onInstanceSet(createdByCreateObjectMessage);
 
-    const metaInfo = ensureSyncArrayMetaInfo(this.instance);
-    metaInfo?.on("addChange", (instance, change) => {
+    const metaInfo = getMetaInfo(this.instance, SyncArrayMetaInfo, true);
+    metaInfo?.on("spliced", (instance, change) => {
       this.reportSplice(change.start, change.deletedItems.length, ...change.items);
     });
 
@@ -76,14 +94,11 @@ abstract class SyncArraySerializerBase extends ExtendedTypeSerializer<TInstance>
   }
 
   onCreateMessageReceived(message: CreateObjectMessage<TCreatePayload>, clientToken: ClientToken): void {
-    if (message.typeId === TYPE_ID_SYNCARRAY) this.instance = new SyncableArray<any>();
-    else if (message.typeId === TYPE_ID_OBSERVABLEARRAY) this.instance = new SyncableObservableArray<any>();
-    else this.instance = new Array<any>();
-
+    this.instance = new this._arrayType();
     this.instance.push(...message.data.map((value) => this.deserializeValue(value, clientToken)));
   }
 
-  override onChangeMessageReceived(message: ChangeObjectMessage<SpliceInstruction<any>[]>, clientToken: ClientToken): void {
+  override onChangeMessageReceived(message: ChangeObjectMessage<TChangePayload>, clientToken: ClientToken): void {
     const deserializedSplices = message.data.map((change) => ({
       start: change.start,
       deleteCount: change.deleteCount,
@@ -93,23 +108,19 @@ abstract class SyncArraySerializerBase extends ExtendedTypeSerializer<TInstance>
     applyChangeSet(this.instance, deserializedSplices);
   }
 
-  generateMessages(clientToken: ClientToken, isNewClientConnection: boolean): Message[] {
+  generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
     const messages: Message[] = [];
-    if (isNewClientConnection || this.hasPendingChanges) {
+    if (isNewClient || this.hasPendingChanges) {
       if (!this._temporaryChanges && this.changeSetMode === "compareStates") {
         this._temporaryChanges = createChangeSet(this._oldArrayContent, this.instance);
       }
     }
-    if (isNewClientConnection) {
-      this.clearAllStoredReferencesWithClientConnection(clientToken);
-      this.instance.forEach((element, index) => {
-        this.storeReference(element, index, clientToken);
-      });
+    if (isNewClient) {
+      this.clearStoredReferencesWithClientToken(clientToken);
 
-      const data: any[] = [];
-      this.instance.forEach((element, index) => {
-        const mappedValue = this.serializeValue(element, clientToken);
-        data.push(mappedValue);
+      const data = this.instance.map((element, index) => {
+        this.storeReference({ value: element, key: index, clientToken });
+        return this.serializeValue(element, clientToken);
       });
 
       const createMessage: CreateObjectMessage<TCreatePayload> = {
@@ -121,9 +132,11 @@ abstract class SyncArraySerializerBase extends ExtendedTypeSerializer<TInstance>
       messages.push(createMessage);
     } else if (this.hasPendingChanges) {
       this._temporaryChanges?.forEach((change) => {
-        for (let i = 0; i < change.deleteCount; i++) this.storeReference(undefined, change.start + i, clientToken);
+        for (let i = 0; i < change.deleteCount; i++) {
+          this.storeReference({ value: undefined, key: change.start + i, clientToken });
+        }
         change.items.forEach((item, itemIndex) => {
-          this.storeReference(item, change.start + itemIndex, clientToken);
+          this.storeReference({ value: item, key: change.start + itemIndex, clientToken });
         });
       });
       const data: SpliceInstruction<any>[] = this._temporaryChanges!.map((change) => ({
@@ -179,48 +192,6 @@ abstract class SyncArraySerializerBase extends ExtendedTypeSerializer<TInstance>
   }
 }
 
-export class ArraySerializer extends SyncArraySerializerBase {
-  static canSerialize(instanceOrTypeId: object | string): boolean {
-    if (typeof instanceOrTypeId === "string") {
-      return instanceOrTypeId === TYPE_ID_NATIVEARRAY;
-    }
-
-    return instanceOrTypeId instanceof Array;
-  }
-
-  getTypeId(clientToken: ClientToken) {
-    return TYPE_ID_NATIVEARRAY;
-  }
-}
-
-export class SyncArraySerializer extends SyncArraySerializerBase {
-  static canSerialize(instanceOrTypeId: object | string): boolean {
-    if (typeof instanceOrTypeId === "string") {
-      return instanceOrTypeId === TYPE_ID_SYNCARRAY;
-    }
-
-    return instanceOrTypeId instanceof SyncableArray;
-  }
-
-  getTypeId(clientToken: ClientToken) {
-    return TYPE_ID_SYNCARRAY;
-  }
-}
-
-export class SyncObservableArraySerializer extends SyncArraySerializerBase {
-  static canSerialize(instanceOrTypeId: object | string): boolean {
-    if (typeof instanceOrTypeId === "string") {
-      return instanceOrTypeId === TYPE_ID_OBSERVABLEARRAY;
-    }
-
-    return instanceOrTypeId instanceof SyncableObservableArray;
-  }
-
-  getTypeId(clientToken: ClientToken) {
-    return TYPE_ID_OBSERVABLEARRAY;
-  }
-}
-
-defaultIntrinsicSerializers.push(SyncObservableArraySerializer);
-defaultIntrinsicSerializers.push(SyncArraySerializer);
-defaultIntrinsicSerializers.push(ArraySerializer);
+export const ArraySerializer = createSerializerClass(SyncableArraySerializerBase, Array, TYPE_ID_NATIVEARRAY, true);
+export const SyncableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableArray, TYPE_ID_SYNCARRAY, false);
+export const SyncableObservableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableObservableArray, TYPE_ID_OBSERVABLEARRAY, false);

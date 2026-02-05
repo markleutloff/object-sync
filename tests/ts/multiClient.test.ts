@@ -8,13 +8,13 @@ class Root {
   accessor value: number = 0;
 }
 
-type ObjectSyncAndClientConnection = ObjectSync & {
-  hostClientConnection: ClientToken;
+type ObjectSyncAndClientToken = ObjectSync & {
+  hostClientToken: ClientToken;
 };
 
 describe("ObjectSync multiple clients", () => {
   let hostObjectSync: ObjectSync;
-  let clientObjectSyncs: Map<ClientToken, ObjectSyncAndClientConnection> = new Map();
+  let clientObjectSyncs: Map<ClientToken, ObjectSyncAndClientToken> = new Map();
 
   let hostRoot: Root;
   let nextClientId = 0;
@@ -23,8 +23,8 @@ describe("ObjectSync multiple clients", () => {
     await hostObjectSync.exchangeMessagesAsync({
       sendToClientAsync: async (clientToken, messages) => {
         const clientObjectSync = clientObjectSyncs.get(clientToken)!;
-        await clientObjectSync.applyMessagesAsync(messages, clientObjectSync.hostClientConnection);
-        return clientObjectSync.getMessages(clientObjectSync.hostClientConnection);
+        await clientObjectSync.applyMessagesAsync(messages, clientObjectSync.hostClientToken);
+        return clientObjectSync.getMessages(clientObjectSync.hostClientToken);
       },
     });
   }
@@ -51,11 +51,11 @@ describe("ObjectSync multiple clients", () => {
         ...defaultSettings,
       };
       const clientObjectSync = new ObjectSync(clientSettings);
-      const result = clientObjectSync as ObjectSyncAndClientConnection;
-      result.hostClientConnection = clientObjectSync.registerClient({ identity: "host" });
+      const result = clientObjectSync as ObjectSyncAndClientToken;
+      result.hostClientToken = clientObjectSync.registerClient({ identity: "host" });
 
-      const clientConnectionForHost = hostObjectSync.registerClient({ identity: clientSettings.identity });
-      clientObjectSyncs.set(clientConnectionForHost, result);
+      const clientTokenForHost = hostObjectSync.registerClient({ identity: clientSettings.identity });
+      clientObjectSyncs.set(clientTokenForHost, result);
       return result;
     }
 

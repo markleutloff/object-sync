@@ -7,6 +7,7 @@ import { ensureObjectSyncMetaInfo, nothing } from "../../../decorators/base.js";
 import { beforeExecuteOnClient, getSyncMethodInfo } from "../../../decorators/syncMethod.js";
 import { beforeSendObjectToClient, getTrackableTypeInfo, TrackableConstructorInfo } from "../../../decorators/syncObject.js";
 import { beforeSendPropertyToClient, checkCanApplyProperty, TrackedPropertyInfo, TrackedPropertySettingsBase } from "../../../decorators/syncProperty.js";
+import { SerializedValue } from "../../serializedTypes.js";
 
 type PropertyValueInfo = {
   value: any;
@@ -15,9 +16,11 @@ type PropertyValueInfo = {
   isBeeingApplied: boolean;
 };
 
-type TPayload = Partial<{
-  [propertyKey: string]: any;
-}>;
+type TPayload = {
+  [propertyKey: string]: SerializedValue;
+} & {
+  "[[constructor]]"?: SerializedValue[];
+};
 
 type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
 
@@ -231,7 +234,7 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
     if (this._typeInfo.constructorArguments !== undefined) {
       const constructorArgumentsResult =
         typeof this._typeInfo.constructorArguments === "function"
-          ? this._typeInfo.constructorArguments.call(this.instance, { instance: this.instance, constructor: this.type, typeId, destinationClientConnection: clientToken })
+          ? this._typeInfo.constructorArguments.call(this.instance, { instance: this.instance, constructor: this.type, typeId, destinationClientToken: clientToken })
           : this._typeInfo.constructorArguments;
 
       const finalConstructorArguments: any[] = (data["[[constructor]]"] = []);
@@ -245,14 +248,11 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
           }
 
           const value = propertyValueInfo.value;
-          const finalValue = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
-          if (finalValue === nothing) {
-            this.storeReference(undefined, propertyKey, clientToken);
-            return;
-          }
+          const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
+          if (beforeSendResult.skip) return;
 
-          this.storeReference(finalValue, propertyKey, clientToken);
-          finalConstructorArguments.push(this.serializeValue(finalValue, clientToken));
+          this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
+          finalConstructorArguments.push(this.serializeValue(beforeSendResult.value, clientToken));
         });
       } else {
         if (constructorArgumentsResult.propertiesToOmit) {
@@ -271,16 +271,11 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
       if (propertiesToOmit.has(propertyKey)) return;
 
       const value = propertyValueInfo.value;
-      const finalValue = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
-      if (finalValue === nothing) {
-        this.storeReference(undefined, propertyKey, clientToken);
-        return;
-      }
+      const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
+      if (beforeSendResult.skip) return;
 
-      this.storeReference(finalValue, propertyKey, clientToken);
-
-      const transformedValue = this.serializeValue(finalValue, clientToken);
-      data[propertyKey] = transformedValue;
+      this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
+      data[propertyKey as string] = this.serializeValue(beforeSendResult.value, clientToken);
     });
 
     const createMessage: CreateObjectMessage = {
@@ -300,16 +295,13 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
       if (!propertyValueInfo.hasPendingChanges) return;
 
       const value = propertyValueInfo.value;
-      const finalValue = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
-      if (finalValue === nothing) {
-        this.storeReference(undefined, propertyKey, clientToken);
-        return;
-      }
+      const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
+      if (beforeSendResult.skip) return;
 
-      this.storeReference(finalValue, propertyKey, clientToken);
+      this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
 
-      const transformedValue = this.serializeValue(finalValue, clientToken);
-      data[propertyKey] = transformedValue;
+      const transformedValue = this.serializeValue(beforeSendResult.value, clientToken);
+      data[propertyKey as string] = transformedValue;
       hasDataToSend = true;
     });
 
@@ -324,17 +316,17 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
     return changeMessage;
   }
 
-  generateMessages(clientToken: ClientToken, isNewClientConnection: boolean): Message[] {
+  generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
     const result: Message[] = [];
 
-    if (isNewClientConnection || this.hasPendingChanges) {
+    if (isNewClient || this.hasPendingChanges) {
       let typeId = this.getTypeId(clientToken);
       if (typeId === null) {
         // Object should not be sent to client
         return result;
       }
 
-      if (isNewClientConnection) result.push(this.generateCreateMessage(typeId, clientToken));
+      if (isNewClient) result.push(this.generateCreateMessage(typeId, clientToken));
       else {
         const changeMessage = this.generateChangeMessage(clientToken);
         if (changeMessage) result.push(changeMessage);
@@ -425,7 +417,7 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
     }
     if (current.value === value) return;
 
-    this.clearAllStoredReferencesWithKey(key);
+    this.clearStoredReferencesWithKey(key);
 
     current.value = value;
     if (current.isBeeingApplied) return;

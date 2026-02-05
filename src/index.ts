@@ -1,32 +1,4 @@
-export {
-  ObjectSync,
-  type ObjectIdGeneratorSettings,
-  type FinalizedObjectSyncSettings,
-  type ObjectSyncSettings,
-  type StandaloneSerializationSettings,
-  serializeValue,
-  deserializeValue,
-  deserializeValueAsync,
-} from "./objectSync/index.js";
-
-export { syncMethod, syncObject, syncProperty, nothing, getTrackableTypeInfo, allSyncObjectTypes } from "./decorators/index.js";
-
-export {
-  type TypeSerializerConstructor,
-  TypeSerializer,
-  ExtendedTypeSerializer,
-  type SetSerializer,
-  type MapSerializer,
-  type ObjectSerializer,
-  type ArraySerializer,
-  type SyncArraySerializer,
-  type SyncObservableArraySerializer,
-  SyncableArray,
-  SyncableObservableArray,
-  MakeSimpleTypeSerializer,
-  type ISyncObjectDispatcher,
-  type ISyncArrayDispatcher,
-} from "./serialization/index.js";
+export { syncMethod, syncObject, syncProperty, nothing, getTrackableTypeInfo } from "./decorators/index.js";
 
 export {
   type ChangeObjectMessage,
@@ -51,3 +23,38 @@ export {
   ExecuteMessageType,
   ExecuteFinishedMessageType,
 } from "./shared/index.js";
+
+export {
+  type TypeSerializerConstructor,
+  type SerializedValue,
+  TypeSerializer,
+  ExtendedTypeSerializer,
+  ObjectSerializer,
+  SetSerializer,
+  SyncableSetSerializer,
+  MapSerializer,
+  SyncableMapSerializer,
+  ArraySerializer,
+  SyncableArraySerializer,
+  SyncableObservableArraySerializer,
+  SyncableArray,
+  SyncableObservableArray,
+  createSimpleTypeSerializerClass,
+  type ISyncObjectDispatcher,
+  type ISyncArrayDispatcher,
+  defaultIntrinsicSerializers,
+  defaultSerializersOrTypes,
+} from "./serialization/index.js";
+
+export {
+  ObjectSync,
+  type ObjectIdGeneratorSettings,
+  type FinalizedObjectSyncSettings,
+  type ObjectSyncSettings,
+  type StandaloneSerializationSettings,
+  type ArrayChangeSetMode,
+  type MemoryManagementMode,
+  serializeValue,
+  deserializeValue,
+  deserializeValueAsync,
+} from "./objectSync/index.js";

@@ -1,13 +1,11 @@
 import { EventEmitter, IEventEmitter } from "../../../shared/eventEmitter.js";
-import { SpliceInstruction, SpliceInstructionEx } from "./changeSet.js";
-import { SyncableArray } from "./syncArray.js";
+import { SpliceInstructionEx } from "./changeSet.js";
+import { SyncableArray } from "./syncableArray.js";
 
 type SyncableObservableArrayEventMap = {
   added: (items: any[], start: number) => void;
   removed: (items: any[], start: number) => void;
 };
-
-export type ObservableArray<T = any[]> = T[] & IEventEmitter<SyncableObservableArrayEventMap>;
 
 export class SyncableObservableArray<T = any> extends SyncableArray<T> implements IEventEmitter<SyncableObservableArrayEventMap> {
   private readonly _eventEmitter: EventEmitter<SyncableObservableArrayEventMap> = new EventEmitter<SyncableObservableArrayEventMap>();
