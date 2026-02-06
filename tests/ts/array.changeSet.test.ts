@@ -10,7 +10,7 @@ function createChangeSetAndApply(before: any[], after: any[], numberOfChangeSetE
 }
 
 describe("Array ChangeSet", () => {
-  it("Should nothing when not needed", () => {
+  it("Should change nothing when not needed", () => {
     createChangeSetAndApply(["a", "b", "c"], ["a", "b", "c"], 0);
   });
   it("Should fill the array", () => {

@@ -1,102 +1,73 @@
-import { ObjectSync, SyncableObservableArray, ClientToken, syncObject, Message, ObjectSyncSettings, SyncableObservableArraySerializer } from "../../src/index.js";
 import { describe, it, beforeEach } from "node:test";
+import { ObjectSync, ClientToken, Message } from "../../src/index.js";
 import assert from "assert";
-
-@syncObject({ typeId: "Beta" })
-class Beta {}
+import { SyncableObservableArray } from "../../src/serialization/index.js";
 
 describe("SyncableObservableArray Serializer", () => {
   let sourceSync: ObjectSync;
   let destSync: ObjectSync;
+  let sourceObject: SyncableObservableArray<any>;
   let sourceSyncDestClientToken: ClientToken;
   let destSyncDestClientToken: ClientToken;
-
-  let alpha: SyncableObservableArray<string>;
-  let alphaClient: SyncableObservableArray<string>;
-
-  beforeEach(async () => {
-    const hostSettings: ObjectSyncSettings = {
-      identity: "host",
-      serializers: [Beta, SyncableObservableArraySerializer],
-    };
-
-    const clientSettings: ObjectSyncSettings = {
-      identity: "client",
-      serializers: [Beta, SyncableObservableArraySerializer],
-    };
-
-    sourceSync = new ObjectSync(hostSettings);
-    destSync = new ObjectSync(clientSettings);
-
-    sourceSyncDestClientToken = sourceSync.registerClient({ identity: "client" });
-    destSyncDestClientToken = destSync.registerClient({ identity: "host" });
-
-    alpha = new SyncableObservableArray<string>("init1", "init2");
-    sourceSync.track(alpha);
-
-    await sendDataToDest();
-    alphaClient = destSync.findOne<SyncableObservableArray<string>>(SyncableObservableArray)!;
-  });
 
   const sendDataToDest = async (messages?: Message[]) => {
     messages ??= sourceSync.getMessages(sourceSyncDestClientToken);
     await destSync.applyMessagesAsync(messages, destSyncDestClientToken);
+    return messages;
   };
 
-  it("should report new items", async () => {
-    let hasTwoNewItems = false;
-
-    alphaClient.on("added", (items, start) => {
-      hasTwoNewItems = items.length === 2;
+  beforeEach(() => {
+    sourceSync = new ObjectSync({
+      identity: "source",
     });
+    sourceSyncDestClientToken = sourceSync.registerClient({ identity: "dest" });
+    destSync = new ObjectSync({
+      identity: "dest",
+    });
+    destSyncDestClientToken = destSync.registerClient({ identity: "source" });
 
-    alpha.push("value3", "value4");
-
-    await sendDataToDest();
-
-    assert.ok(hasTwoNewItems);
+    sourceObject = new SyncableObservableArray();
+    sourceObject.push("value1");
+    sourceSync.track(sourceObject, "main");
   });
 
-  it("should report removed items", async () => {
-    let hasTwoRemovedItems = false;
-
-    alphaClient.on("removed", (items, start) => {
-      hasTwoRemovedItems = items.length === 2;
-    });
-
-    alpha.splice(0, 2);
-
+  it("should emit events on client and host", async () => {
     await sendDataToDest();
 
-    assert.ok(hasTwoRemovedItems);
-  });
+    const destObject = destSync.findOne<SyncableObservableArray<any>>(SyncableObservableArray, "main")!;
 
-  it("should report added and removed items", async () => {
-    let hasRemovedItem = false;
-    let hasTwoNewItems = false;
-
-    alphaClient.on("removed", (items, start) => {
-      hasRemovedItem = items.length === 1 && start === 1;
+    let hasSourceEmittedAddedEvent = false;
+    sourceObject.once("added", (items) => {
+      if (items.length === 2 && items[0] === "value3" && items[1] === "value4") {
+        hasSourceEmittedAddedEvent = true;
+      }
     });
-
-    alphaClient.on("added", (items, start) => {
-      hasTwoNewItems = items.length === 2;
+    sourceObject.push("value3", "value4");
+    assert(hasSourceEmittedAddedEvent);
+    let hasDestEmittedAddedEvent = false;
+    destObject.once("added", (items) => {
+      if (items.length === 2 && items[0] === "value3" && items[1] === "value4") {
+        hasDestEmittedAddedEvent = true;
+      }
     });
-
-    alpha.splice(1, 1);
-    alpha.push("value3", "value4");
-
     await sendDataToDest();
+    assert(hasDestEmittedAddedEvent);
 
-    assert.ok(hasRemovedItem);
-    assert.ok(hasTwoNewItems);
-  });
-
-  it("should clean up stored references", async () => {
-    sourceSync.untrack(alpha);
-
+    let hasSourceEmittedRemovedEvent = false;
+    sourceObject.once("removed", (items) => {
+      if (items.length === 1 && items[0] === "value1") {
+        hasSourceEmittedRemovedEvent = true;
+      }
+    });
+    sourceObject.splice(0, 1);
+    assert(hasSourceEmittedRemovedEvent);
+    let hasDestEmittedRemovedEvent = false;
+    destObject.once("removed", (items) => {
+      if (items.length === 1 && items[0] === "value1") {
+        hasDestEmittedRemovedEvent = true;
+      }
+    });
     await sendDataToDest();
-
-    assert(destSync.allTrackedObjects.length === 0);
+    assert(hasDestEmittedRemovedEvent);
   });
 });

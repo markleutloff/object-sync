@@ -1,7 +1,4 @@
-import "../shared/decorators.js";
-import { Constructor } from "../shared/types.js";
-import { ClientToken } from "../shared/clientToken.js";
-import { getObjectSyncMetaInfo } from "./base.js";
+import { ClientToken, Constructor } from "../../../../shared/index.js";
 import { ensureTrackableConstructorInfo, getTrackableTypeInfo } from "./syncObject.js";
 import { TrackedPropertySettingsBase } from "./syncProperty.js";
 

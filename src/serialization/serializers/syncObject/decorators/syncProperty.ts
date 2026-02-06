@@ -1,8 +1,7 @@
-import "../shared/decorators.js";
-import { Constructor } from "../shared/types.js";
-import { ClientToken } from "../shared/clientToken.js";
-import { getObjectSyncMetaInfo, nothing } from "./base.js";
+import { getMetaInfo, ClientToken, Constructor } from "../../../../shared/index.js";
 import { ensureTrackableConstructorInfo, getTrackableTypeInfo } from "./syncObject.js";
+import { ObjectSyncMetaInfo } from "../metaInfo.js";
+import { nothing } from "../types.js";
 
 export type CanTrackPayload<T extends object, TKey extends keyof T & string> = {
   // The instance of the object which contains the property/method.
@@ -87,7 +86,7 @@ export function syncProperty<This extends object, Return>(settings?: TrackedProp
 
         if (propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly") return;
 
-        const metaInfo = getObjectSyncMetaInfo(this as any);
+        const metaInfo = getMetaInfo(this as any, ObjectSyncMetaInfo);
         metaInfo?.reportPropertyChanged(this as any, propertyInfo, propertyName, value);
       },
     };

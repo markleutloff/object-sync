@@ -21,11 +21,11 @@ describe("Map Serializer", () => {
     sourceSync = new ObjectSync({
       identity: "source",
     });
-    sourceSyncDestClientToken = sourceSync.registerClient({ identity: "dest" });
     destSync = new ObjectSync({
       identity: "dest",
     });
-    destSyncDestClientToken = destSync.registerClient({ identity: "source" });
+    sourceSyncDestClientToken = sourceSync.registerClient({ identity: destSync.identity });
+    destSyncDestClientToken = destSync.registerClient({ identity: sourceSync.identity });
 
     sourceObject = new Map();
     sourceObject.set("key1", "value1");

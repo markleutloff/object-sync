@@ -1,6 +1,6 @@
 {
   "name": "simple-object-sync",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
   "repository": {
     "url": "https://github.com/markleutloff/object-sync"
@@ -34,8 +34,10 @@
     "test:ts:serializer.error": "tsx --test tests/ts/serializer.error.test.ts",
     "test:ts:serializer.map": "tsx --test tests/ts/serializer.map.test.ts",
     "test:ts:serializer.syncableMap": "tsx --test tests/ts/serializer.syncableMap.test.ts",
+    "test:ts:serializer.syncableObservableMap": "tsx --test tests/ts/serializer.syncableObservableMap.test.ts",
     "test:ts:serializer.set": "tsx --test tests/ts/serializer.set.test.ts",
     "test:ts:serializer.syncableSet": "tsx --test tests/ts/serializer.syncableSet.test.ts",
+    "test:ts:serializer.syncableObservableSet": "tsx --test tests/ts/serializer.syncableObservableSet.test.ts",
     "test:ts:serializer.object": "tsx --test tests/ts/serializer.object.test.ts",
     "test:ts:serializer.syncObject": "tsx --test tests/ts/serializer.syncObject.test.ts",
     "test:ts:serializer.array": "tsx --test tests/ts/serializer.array.test.ts",

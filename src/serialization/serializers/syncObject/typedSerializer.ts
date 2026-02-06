@@ -1,8 +1,8 @@
-import { ObjectInfo } from "../../../shared/objectInfo.js";
-import { Constructor } from "../../../shared/types.js";
-import { getTrackableTypeInfo } from "../../../decorators/syncObject.js";
+import { Constructor } from "../../../shared/index.js";
+import { getTrackableTypeInfo } from "./decorators/syncObject.js";
 import { SyncObjectSerializer } from "./serializer.js";
 import { TypeSerializerConstructor } from "../../serializedTypes.js";
+import { ObjectInfo } from "../../objectInfo.js";
 
 const serializersByType: Map<Constructor, TypeSerializerConstructor<SyncObjectSerializer<any>>> = new Map();
 
@@ -25,12 +25,8 @@ export function getSyncObjectSerializer<TInstance extends object>(type: Construc
       return type;
     }
 
-    get typeId(): string {
-      return typeId;
-    }
-
     constructor(objectInfo: ObjectInfo<TInstance>) {
-      super(objectInfo);
+      super(objectInfo, typeId);
     }
   };
 

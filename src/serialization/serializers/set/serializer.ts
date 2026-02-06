@@ -1,12 +1,10 @@
-import { ChangeObjectMessage, CreateObjectMessage, Message } from "../../../shared/messages.js";
-import { ExtendedTypeSerializer } from "../../serializer.js";
+import { ClientToken, Constructor, getMetaInfo, SerializedValue, ChangeObjectMessage, CreateObjectMessage, Message } from "../../../shared/index.js";
+import { ExtendedTypeSerializer } from "../../extendedTypeSerializer.js";
 import { createSerializerClass } from "../base.js";
-import { ObjectInfo } from "../../../shared/objectInfo.js";
-import { ClientToken } from "../../../shared/clientToken.js";
-import { Constructor } from "../../../shared/types.js";
 import { SyncableSetMetaInfo } from "./metaInfo.js";
-import { getMetaInfo } from "../../../shared/metaInfo.js";
-import { SerializedValue } from "../../serializedTypes.js";
+import { SyncableSet } from "./syncableSet.js";
+import { SyncableObservableSet } from "./syncableObservableSet.js";
+import { ObjectInfo } from "../../objectInfo.js";
 
 type TInstance = Set<any>;
 type TCreatePayload = SerializedValue[];
@@ -33,6 +31,7 @@ type ChangeEntry =
 
 const TYPE_ID_NATIVESET = "<nativeSet>";
 const TYPE_ID_SYNCABLESET = "<syncableSet>";
+const TYPE_ID_SYNCABLEOBSERVABLESET = "<syncableObservableSet>";
 
 export interface ISetDispatcher<TValue = any> {
   reportClear(): void;
@@ -52,7 +51,7 @@ abstract class SyncableSetSerializerBase extends ExtendedTypeSerializer<TInstanc
     super(objectInfo);
   }
 
-  getTypeId(clientToken: ClientToken) {
+  override getTypeId(clientToken: ClientToken): string | null {
     return this._typeId;
   }
 
@@ -114,63 +113,37 @@ abstract class SyncableSetSerializerBase extends ExtendedTypeSerializer<TInstanc
   }
 
   generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
-    if (!isNewClient && !this.hasPendingChanges) return [];
-
-    if (isNewClient) {
-      const message: CreateObjectMessage<TCreatePayload> = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: this.getTypeId(clientToken)!,
-        data: this.getCreationData(clientToken),
-      };
-      return [message];
-    } else {
-      const message: ChangeObjectMessage<TChangePayload> = {
-        type: "change",
-        objectId: this.objectId,
-        data: this.getChangeData(clientToken),
-      };
-      return [message];
-    }
+    if (isNewClient) return [this.createMessage("create", this.getCreationData(clientToken), clientToken)];
+    else if (this.hasPendingChanges) return [this.createMessage("change", this.getChangeData(clientToken))];
     return [];
   }
 
   private getChangeData(clientToken: ClientToken): TChangePayload {
     return this._changes.map((change) => {
       if ("clear" in change) {
-        this.clearStoredReferencesWithClientToken(clientToken);
+        this.clearStoredReferences(clientToken);
         return { clear: true };
       } else if ("delete" in change) {
-        this.storeReference({
-          value: undefined,
-          key: change.value,
-          clientToken,
-        });
+        this.clearStoredReferences(change.value, clientToken);
         const serializedValue = this.serializeValue(change.value, clientToken);
         return { value: serializedValue, delete: true };
       } else {
-        this.storeReference({
+        const serializedValue = this.serializeValue({
           clientToken,
           key: change.value,
           value: change.value,
         });
-        const serializedValue = this.serializeValue(change.value, clientToken);
         return { value: serializedValue };
       }
     });
   }
 
   private getCreationData(clientToken: ClientToken) {
-    this.clearStoredReferencesWithClientToken(clientToken);
+    this.clearStoredReferences(clientToken);
 
     const data: TCreatePayload = [];
     for (const value of this.instance) {
-      this.storeReference({
-        clientToken,
-        key: value,
-        value,
-      });
-      const serializedValue = this.serializeValue(value, clientToken);
+      const serializedValue = this.serializeValue({ value, key: value, clientToken });
       data.push(serializedValue);
     }
     return data;
@@ -202,5 +175,6 @@ abstract class SyncableSetSerializerBase extends ExtendedTypeSerializer<TInstanc
   }
 }
 
+export const SyncableObservableSetSerializer = createSerializerClass(SyncableSetSerializerBase, SyncableObservableSet, TYPE_ID_SYNCABLEOBSERVABLESET, false);
+export const SyncableSetSerializer = createSerializerClass(SyncableSetSerializerBase, SyncableSet, TYPE_ID_SYNCABLESET, false);
 export const SetSerializer = createSerializerClass(SyncableSetSerializerBase, Set, TYPE_ID_NATIVESET, true);
-export const SyncableSetSerializer = createSerializerClass(SyncableSetSerializerBase, Set, TYPE_ID_SYNCABLESET, false);

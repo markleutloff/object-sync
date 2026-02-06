@@ -1,7 +1,5 @@
-import { TypeSerializerConstructor } from "../serialization/serializedTypes.js";
-import { ClientToken } from "../shared/clientToken.js";
-import { Message } from "../shared/messages.js";
-import { Constructor } from "../shared/types.js";
+import { TypeSerializerConstructor } from "../serialization/index.js";
+import { ClientToken, Constructor, Message } from "../shared/index.js";
 
 export type MemoryManagementMode = "weak" | "byClient";
 export type ArrayChangeSetMode = "trackSplices" | "compareStates";
@@ -93,7 +91,7 @@ export type ObjectSyncSettings = {
    * When not provided, default intrinsic type serializers will be used.
    */
   intrinsicSerializers?: TypeSerializerConstructor[];
-  
+
   /**
    * Settings for generating object IDs.
    * When not provided, a default generator with the identity as prefix will be used (eg: "host-1").

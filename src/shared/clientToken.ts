@@ -11,9 +11,6 @@ export type ClientConnectionSettings = {
 /**
  * Representation of a connection to a client.
  */
-export type ClientToken = {
-  /**
-   * Identity of the client (e.g., "host", "client1", etc.).
-   */
-  identity: string;
-};
+export class ClientToken {
+  constructor(public readonly identity: string) {}
+}

@@ -1,11 +1,11 @@
 # simple-object-sync
 
 Synchronize object state between host and client environments with fine-grained control over properties and methods.  
-Supports multi-client scenarios and advanced array/object synchronization.  
+Supports multi-client scenarios and advanced array/object synchronization.
 
-Can also be used to simply serialize an object tree for later deserialization.  
+Can also be used to simply serialize an object tree for later deserialization.
 
-**Communication layer note:** 
+**Communication layer note:**
 
 This library does not handle the connection or communication layer (such as transferring messages over ports, sockets, or other transport mechanisms).  
 You are responsible for implementing the connection layer and for sending/receiving messages between host and client using your preferred method.
@@ -32,7 +32,7 @@ If you need to limit which types can be synchronized and instantiated, you must 
 
   Use decorators to mark properties for tracking.  
   Changes are automatically detected and can be synchronized to clients.  
-  Only changes relevant for a client will be transmitted.  
+  Only changes relevant for a client will be transmitted.
 
 - **Call methods on clients:**
 
@@ -51,10 +51,23 @@ If you need to limit which types can be synchronized and instantiated, you must 
   You must implement the transport layer to send/receive these messages between host and clients.
 
 - **Intrinsic type synchronization:**
-  - `SyncableSet`: Synchronizes `Set<TValue>` values and mutations.
-  - `SyncableMap`: Synchronizes `Map<TKey, TValue>` values and mutations.
-  - `SyncableArray`: Synchronizes `Array<TValue>` values and mutations (push, splice, etc.) between host and client.
-  - `SyncableObservableArray`: Extends `SyncableArray` with event support (`on`, `off`) for reacting to changes such as items being added or removed.
+  - `Error` and following subtypes will be synchronized (without mutations):
+    - `EvalError`
+    - `RangeError`
+    - `ReferenceError`
+    - `SyntaxError`
+    - `TypeError`
+    - `URIError`
+    - `AggregateError`
+  - `Set<TValue>`: Synchronizes `Set<TValue>` values but not mutations.
+    - `SyncableSet<TValue>`: Supports mutations.
+    - `SyncableObservableSet<TValue>`: Supports mutations and is an event emitter which reports `cleared`, `added` and `deleted` events.
+  - `Array<TValue>`: Synchronizes `Array<TValue>` values but no mutations.
+    - `SyncableArray<TValue>`: Supports mutations.
+    - `SyncableObservableArray<TValue>`: Supports mutations and is an event emitter which reports `added` and `removed` events.
+  - `Map<TKey, TValue>`: Synchronizes `Map<TKey, TValue>` values but no mutations.
+    - `SyncableMap<TKey, TValue>`: Synchronizes `Map<TKey, TValue>` values and mutations.
+    - `SyncableObservableMap<TKey, TValue>`: Supports mutations and is an event emitter which reports `cleared`, `added` and `deleted` events.
 
 - **TypeScript support:**
 
@@ -83,9 +96,9 @@ class SomeTrackableClass {
   // Allow remote invocation of this method from clients
   @syncMethod({
     promiseHandlingType: "await", // Await the result before responding
-    beforeExecuteOnClient({ args, destinationClientConnection }) {
+    beforeExecuteOnClient({ args, destinationClientToken }) {
       // Example: modify arguments before execution on client
-      args[0] = args[0] + destinationClientConnection.identity;
+      args[0] = args[0] + destinationClientToken.identity;
 
       // Allow the execution, return false if you dont want that the client executes the method
       return true;
@@ -105,8 +118,10 @@ import { ObjectSync } from "simple-object-sync";
 
 // Create the host instance and register trackable types
 const hostSync = new ObjectSync({
-  identity: "host", // Unique identity for the host
-  serializers: [SomeTrackableClass], // List of trackable types
+  // Unique identity for the host
+  identity: "host",
+  // Optional list of serializers/types that should be supported
+  serializers: [SomeTrackableClass],
 });
 
 // Register multiple clients with unique identities
@@ -205,12 +220,11 @@ Like with an `SyncableArray<T>`, changes to a `Map<Key, Value>` and `Set<Value>`
 ```typescript
 import { SyncableMap, SyncableSet } from "simple-object-sync";
 
-const map = new SyncableMap<string, number>(
-  [
-    ["a", 1], 
-    ["b", 2], 
-    ["c", 3]
-  ]);
+const map = new SyncableMap<string, number>([
+  ["a", 1],
+  ["b", 2],
+  ["c", 3],
+]);
 hostSync.track(map);
 
 const set = new SyncableSet<string>(["a", "b", "c"]);
@@ -251,10 +265,10 @@ const MySerializableClassSerializer = createSimpleTypeSerializerClass<MySerializ
 const hostSync = new ObjectSync({
   ...
   // Register the serializer
-  serializers: [MySerializableClassSerializer, ...], 
+  serializers: [MySerializableClassSerializer, ...],
 
   // You can also just register the type, the system will automatically grab the serializer you created
-  serializers: [MySerializableClass, ...], 
+  serializers: [MySerializableClass, ...],
 });
 ```
 
@@ -287,60 +301,43 @@ class MyClass extends EventEmitter<EventMap> {
 ```
 
 ```typescript
-import { ExtendedTypeSerializer, ObjectInfo } from "simple-object-sync";
+import { ExtendedTypeSerializer, ObjectInfo, syncSerializer, Message, ChangeObjectMessage, CreateObjectMessage } from "simple-object-sync";
 
-type TInstance = MySerializableClass;
-type TCreatePayload = number;
-type TChangePayload = number;
 const TYPE_ID = "MySerializableClass";
 
-class MySerializableClassSerializer extends ExtendedTypeSerializer<TInstance, TCreatePayload, TChangePayload> {
-  static canSerialize(instanceOrTypeId: TInstance | string): boolean {
-    if (typeof instanceOrTypeId === "string") {
-      return instanceOrTypeId === TYPE_ID;
-    }
-    return instanceOrTypId instanceof MySerializableClass;
+@syncSerializer({
+  typeId: TYPE_ID,
+  type: MySerializableClass,
+})
+class MySerializableClassSerializer extends ExtendedTypeSerializer<TMySerializableClassInstance> {
+  constructor(objectInfo: ObjectInfo) {
+    super(objectInfo)
+  }
+
+  public override getTypeId(clientToken: ClientToken) {
+    // Here we could return a different type id based upon the client
+    return TYPE_ID;
   }
 
   public override onInstanceSet(createdByCreateObjectMessage: boolean): void {
     super.onInstanceSet(createdByCreateObjectMessage);
 
-    this..instance.on("valueChanged", () => {
+    this.instance.on("valueChanged", () => {
       this.hasPendingChanges = true; // Defined in the base class to help with detecting changes.
     });
   }
 
-  getTypeId(clientToken: ClientToken) {
-    return TYPE_ID;
-  }
-
-  onCreateMessageReceived(message: CreateObjectMessage<TCreatePayload>, clientToken: ClientToken): void {
+  onCreateMessageReceived(message: CreateObjectMessage<number>, clientToken: ClientToken): void {
     this.instance = new MySerializableClass(message.data);
   }
 
-  override onChangeMessageReceived(message: ChangeObjectMessage<TChangePayload>, clientToken: ClientToken): void {
+  override onChangeMessageReceived(message: ChangeObjectMessage<number>, clientToken: ClientToken): void {
     this.instance.theValue = message.data;
   }
 
-  generateMessages(clientToken: ClientToken, isNewClientConnection: boolean): Message[] {
-    if (isNewClientConnection) {
-       const message: CreateObjectMessage<TPayload> = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: TYPE_ID,
-        data: this.instance.theValue,
-      };
-      return [message];
-    }
-    else if (this.hasPendingChanges) {
-      const message: ChangeObjectMessage<TPayload> = {
-        type: "change",
-        objectId: this.objectId,
-        data: this.instance.theValue,
-      };
-      return [message];
-    }
-
+  generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
+    if (isNewClient) return [this.createMessage("create", this.instance.theValue, clientToken)];
+    else if (this.hasPendingChanges) return [this.createMessage("change", this.instance.theValue)];
     return [];
   }
 }
@@ -355,60 +352,60 @@ also you need to keep track of the reference usage.
 The library and the base TypeSerializers provide methods to do just that.
 
 Generating messages for a client (`generateMessages`):
-  - serialize the value (primitive or reference) by using the `TypeSerializer.serializeValue(value: any, clientToken: ClientToken): SerializedValue` method.
-  - mark the reference or primitive as in use with the `TypeSerializer.storeReference(settings: ReferenceStorageSettings): StoredReference` method.
 
-  ```typescript
-  // In this example we assume that the instance is an Array
-  generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
-    ...
+- serialize the value (primitive or reference) by using the `TypeSerializer.serializeValue(value: any, clientToken: ClientToken): SerializedValue` method.
+- mark the reference or primitive as in use with the `TypeSerializer.storeReference(settings: ReferenceStorageSettings): IDisposable` method.
 
-    const createPayload: SerializedValue[] = [];
+```typescript
+// In this example we assume that the instance is an Array
+generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
+  ...
 
-    for (let index = 0; index < this.instance.length; index++) {
-      const value = this.instance[index];
-      // we mark the value as in use for this clientToken and for this index
-      this.storeReference({ value, key: index, clientToken });
-      // Then we serialize the value to allow the system to transfer whole objects/references
-      const serializedValue = this.serializeValue(value, clientToken);
-      createPayload.push(serializedValue);
-    }
+  const createPayload: SerializedValue[] = [];
 
-    const createMessage = {
-      type: "create",
-      objectId: this.objectId,
-      data: createPayload
-    };
-
-    ...
+  for (let index = 0; index < this.instance.length; index++) {
+    const value = this.instance[index];
+    // we mark the value as in use for this clientToken and for this index
+    this.storeReference({ value, key: index, clientToken });
+    // Then we serialize the value to allow the system to transfer whole objects/references
+    const serializedValue = this.serializeValue(value, clientToken);
+    createPayload.push(serializedValue);
   }
-  ```
 
-  If you store an other reference with the same `clientToken` and `key` the library at a later time (for example to emit a `change` message) the library can handle appropiate `delete` messages to affected clients.
 
-  You can clear all stored references by `key` or `clientToken` too, which can be useful when a change would clear everything:
-  - `TypeSerializer.clearStoredReferencesWithKey(key: any)`
-  - `TypeSerializer.clearStoredReferencesWithClientToken(clientToken: ClientToken)`
+  const createMessage = this.createMessage("create", createPayload, clientToken);
+
+  ...
+}
+```
+
+If you store an other reference with the same `clientToken` and `key` the library at a later time (for example to emit a `change` message) the library can handle appropiate `delete` messages to affected clients.
+
+You can clear all stored references by `key` or `clientToken` too, which can be useful when a change would clear everything:
+
+- `TypeSerializer.clearStoredReferencesWithKey(key: any)`
+- `TypeSerializer.clearStoredReferencesWithClientToken(clientToken: ClientToken)`
 
 When applying those messages we do not need to store a reference to it,  
 but we must deserialize the transferred serialized value back to a normal usable value, by doing this the library ensures that transferred references will be used or created.
-  - deserialize the serialized value by using the `TypeSerializer.deserializeValue(value: SerializedValue, clientToken: ClientToken)` method.
 
-  ```typescript
-  type TCreatePayload = SerializedValue[];
+- deserialize the serialized value by using the `TypeSerializer.deserializeValue(value: SerializedValue, clientToken: ClientToken)` method.
 
-  ...
+```typescript
+type TCreatePayload = SerializedValue[];
 
-  onCreateMessageReceived(createMessage: CreateObjectMessage<TCreatePayload>, clientToken: ClientToken) {
-    // Always create an empty instance, the library can make use of it while we fill it
-    // For example when deserializing circular references. 
-    // If we would only create the instance after deserialization, we would not be able to deserialize circular references.
-    this.instance = []; 
+...
 
-    const deserializedValues = createMessage.data.map((serializedValue) => this.deserializeValue(serializedValue, clientToken));
-    this.instance.push(...deserializedValues);
-  }
-  ```
+onCreateMessageReceived(createMessage: CreateObjectMessage<TCreatePayload>, clientToken: ClientToken) {
+  // Always create an empty instance, the library can make use of it while we fill it
+  // For example when deserializing circular references.
+  // If we would only create the instance after deserialization, we would not be able to deserialize circular references.
+  this.instance = [];
+
+  const deserializedValues = createMessage.data.map((serializedValue) => this.deserializeValue(serializedValue, clientToken));
+  this.instance.push(...deserializedValues);
+}
+```
 
 ### Control property/method sync behavior
 
@@ -420,7 +417,7 @@ You can change the type which will be reported to any client or simply disallow 
 import { syncObject, nothing } from "simple-object-sync";
 
 @syncObject({
-  clientTypeId({instance, constructor, typeId, destinationClientConnection}) {
+  clientTypeId({instance, constructor, typeId, destinationClientToken}) {
     // Client should receive a different type than this:
     return OtherTrackableType; // ot the TypeId string of an other type like: "TheTypeIdOfSomethingElse"
 
@@ -447,7 +444,7 @@ import { syncObject, nothing, syncProperty } from "simple-object-sync";
 @syncObject()
 class MyTrackableClass {
   @syncProperty({
-    beforeSendToClient({ instance, key, value, destinationClientConnection }) {
+    beforeSendToClient({ instance, key, value, destinationClientToken }) {
       // Prevent changes from beeing sent to the client
       return nothing;
 
@@ -466,7 +463,7 @@ class MyTrackableClass {
       // Or disallow it:
       return false;
     },
-    canApply({ instance, key, sourceClientConnection }) {
+    canApply({ instance, key, sourceClientToken }) {
       // Prevents the client from accepting the value
       return false;
 
@@ -517,9 +514,9 @@ class MyTrackableClass {
     // Await the result before finishing to sync message exchanges
     promiseHandlingType: "await",
 
-    beforeExecuteOnClient({ instance, key, args, destinationClientConnection }) {
+    beforeExecuteOnClient({ instance, key, args, destinationClientToken }) {
       // Modify arguments before execution on client
-      args[0] = args[0] + destinationClientConnection.identity;
+      args[0] = args[0] + destinationClientToken.identity;
 
       // Allow the execution
       return true;
@@ -544,7 +541,7 @@ const resultsByClient: Map<ClientToken, Promise<string>> = dispatcher.invoke("so
 
 // when the method that should be invoked has the promiseHandlingType of "await" or when the
 // method that should be executed does not return a Promise the results are ready directly after the message exchange.
-const clientResult = await resultsByClient.get(someClientConnection);
+const clientResult = await resultsByClient.get(someClientToken);
 ```
 
 Methods can also be executed on a specific client set:
@@ -653,7 +650,8 @@ An ObjectSync instance will keep track of which client is using a reference. Whe
 
 For example:
 
-Host:
+#### Host:
+
 ```typescript
 const alpha = Alpha();
 const beta = new Beta();
@@ -665,27 +663,28 @@ hostSync.track(alpha);
 await exchangeMessagesWithClients();
 
 // beta still exists after this, but is no longer used
-alpha.betaToTransfer = null; 
+alpha.betaToTransfer = null;
 
 // 2. As beta is no longer used the previousely created Beta instance will be marked as deleted
 // and clients receive the message to forgot about it.
 await exchangeMessagesWithClients();
 
 // retransfer beta
-alpha.betaToTransfer = beta; 
+alpha.betaToTransfer = beta;
 
 // 3. The clients receive a new create message and will create a new instance
 await exchangeMessagesWithClients();
 ```
 
-Client:
+#### Client:
+
 ```typescript
 // 1. We should receive the create messages for Alpha and Beta
 await receiveMessages();
 const alpha = hostSync.findOne(Alpha);
 const originalBeta = alpha.betaToTransfer;
 
-// 2. We should receive the delete messages for the Beta instance and 
+// 2. We should receive the delete messages for the Beta instance and
 // a change message to let us know about the fact that alpha.betaToTransfer is now null
 await receiveMessages();
 // This should be null, originalBeta has still the old value though
@@ -696,19 +695,19 @@ await receiveMessages();
 // betaNow will have a new instance value
 betaNow = alpha.betaToTransfer;
 
-// This will never enter the scope of the if as originalBeta is not equal to betaNow
-if (originalBeta === betaNow) {
-  
-}
+console.log(originalBeta === betaNow); // false
 ```
 
-To prevent this, you have two options:
-  - Keep the reference known to the client by storing it somewhere which will be synchronized with the client.
-  - Change the `memoryManagementMode` of the `ObjectSync` instance when you create it to `weak`.  
-    When the `memoryManagementMode` is set to `weak` the library will track the lifetime of the tracked reference.  
-    Only when the instance is garbage collected, will a `delete` message be emitted for affected clients.
+To prevent this, you have three options:
 
-Host:
+1. Keep the reference known to the client by storing it somewhere which will be synchronized with the client.
+2. Pin the reference by explicitely tracking it with the `track` method.  
+   This will also send the reference to the client even when it is not used by any other element.
+3. Set the `memoryManagementMode` of the `ObjectSync` instance when you create it, to `weak`.  
+   Only when the instance is garbage collected (`FinalizationRegistry`), will a `delete` message be emitted, for affected clients.
+
+#### Host:
+
 ```typescript
 const hostSync = new ObjectSync({
   ...
@@ -725,19 +724,19 @@ hostSync.track(alpha);
 await exchangeMessagesWithClients();
 
 // beta still exists after this, but is no longer used
-alpha.betaToTransfer = null; 
+alpha.betaToTransfer = null;
 
 // 2. The clients will only receive a change message for alpha.betaToTransfer = null
 await exchangeMessagesWithClients();
 
 // reassign beta
-alpha.betaToTransfer = beta; 
+alpha.betaToTransfer = beta;
 
 // 3. The clients receive a change message and will reuse their stored value for beta
 await exchangeMessagesWithClients();
 
 // 4. Remove all usages of beta, so that the garbage collector may free the instance of Beta at a later time
-alpha.betaToTransfer = null; 
+alpha.betaToTransfer = null;
 beta = null;
 await exchangeMessagesWithClients();
 
@@ -747,7 +746,8 @@ await exchangeMessagesWithClients();
 await exchangeMessagesWithClients();
 ```
 
-Client:
+#### Client:
+
 ```typescript
 // 1. We should receive the create messages for Alpha and Beta
 await receiveMessages();
@@ -765,10 +765,7 @@ await receiveMessages();
 // betaNow will have a new value
 betaNow = alpha.betaToTransfer;
 
-// Now this will enter the scope of the if, as our client simply reuses the same Beta instance it had previously
-if (originalBeta === betaNow) {
-  
-}
+console.log(originalBeta === betaNow); // true
 
 // 4. We should receive the change message for alpha.betaToTransfer, it is now null again
 // but no delete message should be received for now
@@ -791,21 +788,17 @@ the host will automatically revive the reference as long as it is not garbage co
 This library can also be used to store an object graph for later reuse:
 
 ```typescript
-import { serializeValue, deserializeValue} from "simple-object-sync";
+import { serializeValue, deserializeValue } from "simple-object-sync";
 
 const testObject: Record<string, any> = {
-  a: 1,
-  b: "test",
-  c: true,
-  d: null,
-  e: undefined,
-  f: { nested: "value" },
-  g: [1, 2, 3],
-  h: new Map([
+  someString: "test",
+  anObject: { value: "value" },
+  anArray: [1, 2, 3],
+  someMap: new Map([
     ["key1", "value1"],
     ["key2", "value2"],
   ]),
-  i: new Set([1, 2, 3]),
+  someSet: new Set([1, 2, 3]),
 };
 // Add a cyclic reference to demonstrate that this works too
 testObject.self = testObject;
@@ -813,15 +806,181 @@ testObject.self = testObject;
 const serialized = serializeValue(testObject);
 const deserialized = deserializeValue(serialized)!;
 
-console.log(deserialized === testObject); // false
-console.log(deserialized.f === testObject.f); // false
+console.log(deserialized === testObject); // false, deserialization creates new instanced
+console.log(deserialized.anObject === testObject.anObject); // false, the same as above
 
-console.log(deserialized.f.nested === testObject.f.nested); // true
+console.log(deserialized.anObject.value === testObject.anObject.value); // true
 console.log(deserialized.self === deserialized); // true, cyclic references will work
-console.log(deserialized.h.get("key2") === testObject.h.get("key2")); // true
-console.log(deserialized.i.has(2)); // true
-
+console.log(deserialized.someMap.get("key2") === testObject.someMap.get("key2")); // true
+console.log(deserialized.someSet.has(2)); // true
 ```
+
+## ObjectSync Class Overview
+
+The `ObjectSync` class is the core of the library. It manages object tracking, synchronization, message exchange, and client management between host and clients.
+
+**Constructor:**
+
+Creates a new sync manager with the provided settings:
+
+- `new ObjectSync(settings: ObjectSyncSettings)`
+
+**Common Methods:**
+
+Registers a new client. Use a string or settings object:
+
+- `registerClient(identity: string | ClientConnectionSettings): ClientToken`  
+  The identity of a registered client is available in the generated ClientToken.  
+  You can use this in several sync\* decorator hooks for filtering.
+  The identity will not be used for anything else.
+
+Removes a client and cleans up its state:
+
+- `removeClient(clientToken: ClientToken): void`
+
+Tracks an object for synchronization. Returns a disposable to untrack and receive more information about the state of the tracked object:
+
+- `track(instance: object, objectId?: string): TrackedObjectDisposable`
+
+  ```typescript
+  // Host:
+  const someInstance = new SomeClass();
+  const trackedDisposable = hostSync.track(someInstance);
+  console.log(trackedDisposable.objectId); // 'host-1' for example
+  console.log(trackedDisposable.instance === someInstance); // true
+
+  trackedDisposable.dispose(); // someInstance is now no longer pinned and clients will receive delete messages at a later time
+  ```
+
+Stops tracking a root object:
+
+- `untrack(instance: object): boolean`
+
+Gets messages to send to clients:
+
+- `getMessages(clearNonClientStates: boolean = true): Map<ClientToken, Message[]>`
+- `getMessages(clientTokens: ClientToken[], clearNonClientStates: boolean = true): Map<ClientToken, Message[]>`
+- `getMessages(clientToken: ClientToken, clearNonClientStates: boolean = true): Message[]`
+
+Applies messages received from a client:
+
+- `applyMessagesAsync(messages: Message[], clientToken: ClientToken): Promise<void>`
+
+Handles message exchange with clients, including filtering and error handling:
+
+- `exchangeMessagesAsync(settings: ExchangeMessagesSettings): Promise<void>`
+
+Finds one or more tracked object by type or ID:
+
+- `findOne<T>(constructorOrObjectId: Constructor<T> | string, objectId?: string): T | undefined`
+
+  ```typescript
+  // Host:
+  const someInstance = new SomeClass();
+  someInstance.other = new OtherClass();
+  hostSync.track(someInstance, "wellKnownName");
+
+  // Client:
+  const someInstance: SomeClass | undefined = clientSync.findOne<SomeClass>("wellKnownName");
+  const otherInstance: OtherClass | undefined = clientSync.findOne(OtherClass);
+  console.log(someInstance.other === otherInstance); // true
+  ```
+
+- `findAll<T>(constructor: Constructor<T>): T[]`
+
+  ```typescript
+  // Host:
+  const someInstance = new SomeClass();
+  const someOtherInstance = new SomeClass();
+  hostSync.track(someInstance);
+  hostSync.track(someOtherInstance);
+
+  // Client:
+  const someInstances: SomeClass[] = clientSync.findAll<SomeClass>(SomeClass);
+  console.log(someInstances.length); // 2
+  ```
+
+Gets the dispatcher for a tracked object. You can specify a generic dispatcher type for custom or advanced usage:
+
+- `getDispatcher(instance: Array<T>): IArrayDispatcher<T> | null`
+- `getDispatcher(instance: Set<T>): ISetDispatcher<T> | null`
+- `getDispatcher(instance: Map<K, V>): IMapDispatcher<K,V> | null`
+- `getDispatcher(instance: object): ISyncObjectDispatcher | null`
+- `getDispatcher<TDispatcher>(instance: object): TDispatcher | null`  
+
+  The method is generic and allows you to provide a dispatcher type:  
+
+  ```typescript
+  const dispatcher = sync.getDispatcher<MyCustomDispatcherType>(myObject);
+  ```
+
+  This enables type-safe access to custom dispatchers, not just the default dispatchers. Use this when your tracked object has a specialized dispatcher interface.
+
+**Properties:**
+
+- `identity`: The identity of this sync instance.
+- `allTrackedObjects`: All currently tracked objects.
+- `registeredClientTokens`: All registered client tokens.
+
+**Example:**
+
+```typescript
+import { ObjectSync } from "simple-object-sync";
+
+const sync = new ObjectSync({ identity: "host" });
+
+const clientToken = sync.registerClient("client1");
+
+const obj = { foo: 123 };
+sync.track(obj);
+
+const messages = sync.getMessages(clientToken);
+// Send messages to client, receive reply, then:
+sync.applyMessagesAsync(replyMessages, clientToken);
+```
+
+**Tips:**
+
+- Use `track` for root objects you want to keep synchronized and alive.
+- Use `getDispatcher` to invoke methods or report changes on tracked objects.
+- Use `exchangeMessagesAsync` for full message exchange cycles with clients.
+
+The `ObjectSyncSettings` object is used to configure your `ObjectSync` instance.  
+It determines how objects are tracked, serialized, and synchronized between host and clients.
+
+**Required:**
+
+- `identity`: A unique string identifying this sync instance (e.g., `"host"`, `"client1"`).  
+  The identify will only be used to create objectIds when no custom objectId generator is specified
+
+**Optional:**
+
+- `serializers`: An array of classes or serializer constructors for custom types you want to synchronize. If omitted, all available types are used.
+- `intrinsicSerializers`: An array of serializers for built-in types (Array, Map, Set, Object). Defaults are provided if omitted.
+- `objectIdGeneratorSettings`: Controls how object IDs are generated. Use a custom function or a prefix string (Defaults to use the `identity` as prefix string).
+- `arrayChangeSetMode`: `"trackSplices"` (for efficient small changes) or `"compareStates"` (for efficient large changes). Defaults to `"compareStates"`.
+- `memoryManagementMode`: `"weak"` (objects deleted when garbage collected) or `"byClient"` (objects deleted when no client uses them). Defaults to `"byClient"`.
+
+**Example:**
+
+```typescript
+import { ObjectSync } from "simple-object-sync";
+import { MyCustomClass } from "./myCustomClass";
+
+const sync = new ObjectSync({
+  identity: "host",
+  serializers: [MyCustomClass], // Restrict to custom type only
+  arrayChangeSetMode: "trackSplices", // Use splice tracking for arrays
+  memoryManagementMode: "weak", // Use weak memory management
+  objectIdGeneratorSettings: { prefix: "host" }, // Custom ID prefix
+});
+```
+
+**Tips:**
+
+- Use `serializers` to restrict which types can be synchronized.
+- Set `memoryManagementMode` to `"weak"` for reference stability and less aggressive deletion.
+- Adjust `arrayChangeSetMode` for your array mutation patterns.
 
 ## Testing
 

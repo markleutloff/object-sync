@@ -1,6 +1,5 @@
-import { ClientToken } from "./clientToken.js";
-import { EventEmitter } from "./eventEmitter.js";
-import { ObjectInfo } from "./objectInfo.js";
+import { ClientToken, EventEmitter } from "../shared/index.js";
+import { ObjectInfo } from "../serialization/index.js";
 
 type EventMap = {
   freed(objectId: string, clients: Set<ClientToken>): void;

@@ -1,8 +1,6 @@
-import { CreateObjectMessage, Message } from "../../shared/messages.js";
-import { ExtendedTypeSerializer } from "../serializer.js";
+import { ClientToken, SerializedValue, CreateObjectMessage, Message } from "../../shared/index.js";
+import { ExtendedTypeSerializer } from "../extendedTypeSerializer.js";
 import { defaultIntrinsicSerializers } from "./base.js";
-import { ClientToken } from "../../shared/clientToken.js";
-import { SerializedValue } from "../serializedTypes.js";
 
 type TInstance = Error;
 type TCreatePayload = {
@@ -24,7 +22,7 @@ export class ErrorSerializer extends ExtendedTypeSerializer<TInstance, TCreatePa
     return instanceOrTypeId instanceof Error;
   }
 
-  getTypeId(clientToken: ClientToken) {
+  override getTypeId(clientToken: ClientToken): string {
     return TYPE_ID;
   }
 
@@ -67,16 +65,8 @@ export class ErrorSerializer extends ExtendedTypeSerializer<TInstance, TCreatePa
   }
 
   generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
-    if (!isNewClient && !this.hasPendingChanges) return [];
-
     if (isNewClient) {
-      const message: CreateObjectMessage<TCreatePayload> = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: this.getTypeId(clientToken)!,
-        data: this.getCreationData(clientToken),
-      };
-      return [message];
+      return [this.createMessage("create", this.getCreationData(clientToken), clientToken)];
     }
     return [];
   }

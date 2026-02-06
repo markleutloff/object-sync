@@ -1,4 +1,4 @@
-import { getMetaInfo } from "../../../shared/metaInfo.js";
+import { getMetaInfo } from "../../../shared/index.js";
 import { SyncableSetMetaInfo } from "./metaInfo.js";
 
 export class SyncableSet<V> extends Set<V> {

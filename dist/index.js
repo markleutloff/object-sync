@@ -2,8 +2,39 @@ var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-// build/shared/decorators.js
-Symbol.metadata ?? (Symbol.metadata = Symbol("metadata"));
+// build/shared/clientToken.js
+var ClientToken = class {
+  constructor(identity) {
+    __publicField(this, "identity");
+    this.identity = identity;
+  }
+};
+
+// build/shared/messages.js
+var isPropertyInfoSymbol = Symbol("isPropertyInfo");
+var CreateMessageType = "create";
+var ChangeMessageType = "change";
+var DeleteMessageType = "delete";
+var ExecuteMessageType = "execute";
+var ExecuteFinishedMessageType = "executeFinished";
+function isExecuteObjectMessage(message) {
+  return isObjectMessage(message, ExecuteMessageType);
+}
+function isChangeObjectMessage(message) {
+  return isObjectMessage(message, ChangeMessageType);
+}
+function isCreateObjectMessage(message) {
+  return isObjectMessage(message, CreateMessageType);
+}
+function isDeleteObjectMessage(message) {
+  return isObjectMessage(message, DeleteMessageType);
+}
+function isExecuteFinishedObjectMessage(message) {
+  return isObjectMessage(message, ExecuteFinishedMessageType);
+}
+function isObjectMessage(message, type) {
+  return message.type === type;
+}
 
 // build/shared/eventEmitter.js
 var EventEmitter = class {
@@ -50,26 +81,6 @@ var EventEmitter = class {
   }
 };
 
-// build/decorators/base.js
-var nothing = Symbol("nothing");
-var ObjectSyncMetaInfo = class extends EventEmitter {
-  reportPropertyChanged(instance, propertyInfo, propertyKey, value) {
-    this.emit("propertyChanged", propertyInfo, instance, propertyKey, value);
-  }
-};
-var metaInfoByValue = /* @__PURE__ */ new WeakMap();
-function ensureObjectSyncMetaInfo(instance) {
-  let metaInfo = metaInfoByValue.get(instance);
-  if (!metaInfo) {
-    metaInfo = new ObjectSyncMetaInfo();
-    metaInfoByValue.set(instance, metaInfo);
-  }
-  return metaInfo;
-}
-function getObjectSyncMetaInfo(instance) {
-  return metaInfoByValue.get(instance) || null;
-}
-
 // build/shared/types.js
 function isIterable(input) {
   return input && Symbol.iterator in Object(input) && typeof input !== "string";
@@ -81,20 +92,31 @@ function toIterable(input, preferSet = false) {
   return preferSet ? /* @__PURE__ */ new Set([input]) : [input];
 }
 function forEachIterable(input, callback) {
-  for (const item of toIterable(input)) {
-    callback(item);
+  if (isIterable(input)) {
+    for (const item of input) {
+      callback(item);
+    }
+  } else {
+    callback(input);
   }
 }
 function hasInIterable(input, expected) {
   if (input instanceof Set) {
     return input.has(expected);
-  }
-  for (const item of toIterable(input)) {
-    if (item === expected) {
-      return true;
+  } else if (input instanceof Map) {
+    return input.has(expected);
+  } else if (Array.isArray(input)) {
+    return input.includes(expected);
+  } else if (isIterable(input)) {
+    for (const item of input) {
+      if (item === expected) {
+        return true;
+      }
     }
+    return false;
+  } else {
+    return input === expected;
   }
-  return false;
 }
 function isPrimitiveValue(value) {
   return value === void 0 || value === null || typeof value !== "object" && typeof value !== "function";
@@ -102,6 +124,231 @@ function isPrimitiveValue(value) {
 function isPromiseLike(value) {
   return value && typeof value.then === "function" && typeof value.catch === "function";
 }
+
+// build/shared/disposable.js
+function createDisposable(disposeFunction, additionalData) {
+  if (!disposeFunction) {
+    return {
+      dispose() {
+      },
+      [Symbol.dispose]() {
+      },
+      ...additionalData
+    };
+  }
+  let isDisposed = false;
+  return {
+    dispose() {
+      if (isDisposed)
+        return;
+      isDisposed = true;
+      disposeFunction();
+    },
+    [Symbol.dispose]() {
+      this.dispose();
+    },
+    ...additionalData
+  };
+}
+
+// build/shared/metaInfo.js
+var metaInfoByInstance = /* @__PURE__ */ new WeakMap();
+var MetaInfo = class extends EventEmitter {
+};
+function getMetaInfo(instance, metaInfoType, metaInfoGeneratorOrCreateByConstructor) {
+  let metaInfo = metaInfoByInstance.get(instance) ?? null;
+  if (metaInfo) {
+    if (!(metaInfo instanceof metaInfoType))
+      return null;
+    return metaInfo;
+  }
+  if (metaInfoGeneratorOrCreateByConstructor === false || metaInfoGeneratorOrCreateByConstructor === void 0)
+    return null;
+  const metaInfoGenerator = typeof metaInfoGeneratorOrCreateByConstructor === "function" ? metaInfoGeneratorOrCreateByConstructor : void 0;
+  metaInfo = metaInfoGenerator ? metaInfoGenerator(instance) : new metaInfoType();
+  if (!metaInfo)
+    return null;
+  metaInfoByInstance.set(instance, metaInfo);
+  return metaInfo;
+}
+
+// build/shared/clientFilter.js
+function isForClientToken(clientToken, filter) {
+  let hasDesignation = filter.identities === void 0 || clientToken.identity === void 0;
+  if (!hasDesignation) {
+    hasDesignation = hasInIterable(filter.identities, clientToken.identity);
+  }
+  let hasClientToken = filter.clientTokens === void 0;
+  if (!hasClientToken) {
+    hasClientToken = hasInIterable(filter.clientTokens, clientToken);
+  }
+  return filter.isExclusive === (hasDesignation && hasClientToken);
+}
+
+// build/serialization/typeSerializer.js
+var TypeSerializer = class {
+  constructor(_objectInfo) {
+    __publicField(this, "_objectInfo");
+    __publicField(this, "_clients", /* @__PURE__ */ new Set());
+    __publicField(this, "_storedReferencesByKey", /* @__PURE__ */ new Map());
+    __publicField(this, "_hasPendingChanges", false);
+    this._objectInfo = _objectInfo;
+  }
+  static canSerialize(instanceOrTypeId) {
+    throw new Error(`Not implemented in type serializer ${this.name}`);
+  }
+  get hasPendingChanges() {
+    return this._hasPendingChanges;
+  }
+  set hasPendingChanges(value) {
+    if (this._hasPendingChanges)
+      return;
+    this._hasPendingChanges = value;
+    this.reportPendingMessages();
+  }
+  get objectId() {
+    return this._objectInfo.objectId;
+  }
+  get instance() {
+    return this._objectInfo.instance;
+  }
+  set instance(value) {
+    this._objectInfo.instance = value;
+    this.onInstanceSet(true);
+  }
+  onInstanceSet(createdByCreateObjectMessage) {
+    if (!createdByCreateObjectMessage) {
+      this.reportPendingMessages();
+    }
+  }
+  get clients() {
+    return this._clients;
+  }
+  onClientRemoved(clientToken) {
+    this._clients.delete(clientToken);
+    this.clearStoredReferences(clientToken);
+  }
+  clearStates(clientToken) {
+    if (!clientToken)
+      this._hasPendingChanges = false;
+  }
+  reportPendingMessages() {
+    this._objectInfo.owner.reportPendingMessagesForObject(this._objectInfo);
+  }
+  serializeValue(valueOrSettings, clientToken) {
+    if (!clientToken) {
+      const settings = valueOrSettings;
+      this.storeReference(settings);
+      if ("value" in settings) {
+        return this._objectInfo.owner.serializeValue(settings.value, settings.clientToken);
+      } else {
+        return settings.values.map((value) => this._objectInfo.owner.serializeValue(value, settings.clientToken));
+      }
+    }
+    return this._objectInfo.owner.serializeValue(valueOrSettings, clientToken);
+  }
+  deserializeValue(value, clientToken) {
+    return this._objectInfo.owner.deserializeValue(value, clientToken);
+  }
+  storeReference(settings) {
+    let storedReferencesByClient = this._storedReferencesByKey.get(settings.key);
+    if (!storedReferencesByClient) {
+      storedReferencesByClient = /* @__PURE__ */ new Map();
+      this._storedReferencesByKey.set(settings.key, storedReferencesByClient);
+    }
+    const previousStoredReference = storedReferencesByClient.get(settings.clientToken);
+    previousStoredReference?.dispose();
+    const disposables = [];
+    const values = "value" in settings ? [settings.value] : settings.values;
+    for (const value of values) {
+      if (isPrimitiveValue(value))
+        continue;
+      const storedReference = this._objectInfo.owner.trackInternal(value).addReference(settings.clientToken);
+      disposables.push(storedReference);
+    }
+    if (disposables.length === 0) {
+      return createDisposable();
+    }
+    const finalStoredReference = createDisposable(() => {
+      for (const disposable of disposables) {
+        disposable.dispose();
+      }
+      storedReferencesByClient.delete(settings.clientToken);
+      if (storedReferencesByClient.size === 0) {
+        this._storedReferencesByKey.delete(settings.key);
+      }
+    });
+    storedReferencesByClient.set(settings.clientToken, finalStoredReference);
+    return finalStoredReference;
+  }
+  clearStoredReferences(keyOrClientToken, clientToken) {
+    if (keyOrClientToken instanceof ClientToken) {
+      const clientToken2 = keyOrClientToken;
+      this._storedReferencesByKey.forEach((storedReferencesByClient) => {
+        const storedReference = storedReferencesByClient.get(clientToken2);
+        storedReference?.dispose();
+      });
+    } else {
+      const key = keyOrClientToken;
+      const storedReferencesByClient = this._storedReferencesByKey.get(key);
+      if (storedReferencesByClient) {
+        storedReferencesByClient.forEach((storedReference) => {
+          if (!clientToken || storedReferencesByClient.has(clientToken)) {
+            storedReference.dispose();
+          }
+        });
+      }
+    }
+  }
+  createMessage(type, payload, ...extraArguments) {
+    const message = {
+      type,
+      objectId: this.objectId
+    };
+    if (isObjectMessage(message, CreateMessageType)) {
+      message.data = payload;
+      let typeId;
+      if (extraArguments[0] instanceof ClientToken) {
+        typeId = this.getTypeId(extraArguments[0]);
+      } else {
+        typeId = extraArguments[0];
+      }
+      message.typeId = typeId;
+      message.data = payload;
+    } else if (isObjectMessage(message, ChangeMessageType)) {
+      message.data = payload;
+    } else {
+      Object.assign(message, payload);
+    }
+    return message;
+  }
+  get dispatcher() {
+    return null;
+  }
+};
+
+// build/serialization/extendedTypeSerializer.js
+var ExtendedTypeSerializer = class extends TypeSerializer {
+  constructor(objectInfo) {
+    super(objectInfo);
+    __publicField(this, "_messageTypeToHandler", /* @__PURE__ */ new Map());
+    this.registerMessageHandler("create", (message, clientToken) => this.onCreateMessageReceived(message, clientToken));
+    this.registerMessageHandler("change", (message, clientToken) => this.onChangeMessageReceived(message, clientToken));
+  }
+  registerMessageHandler(messageType, handler) {
+    this._messageTypeToHandler.set(messageType, handler);
+  }
+  applyMessage(message, clientToken) {
+    const handler = this._messageTypeToHandler.get(message.type);
+    if (handler) {
+      return handler(message, clientToken);
+    } else if (message.type === "create") {
+      throw new Error(`No handler registered for message type '${message.type}' in serializer.`);
+    }
+  }
+  onChangeMessageReceived(message, clientToken) {
+  }
+};
 
 // build/serialization/serializedTypes.js
 var getSerializerSymbol = Symbol("getSerializer");
@@ -135,144 +382,7 @@ function createSerializerClass(baseClass, constructor, typeId, isInstrinsic) {
   return result;
 }
 
-// build/serialization/serializer.js
-var TypeSerializer = class {
-  constructor(_objectInfo) {
-    __publicField(this, "_objectInfo");
-    __publicField(this, "_clients", /* @__PURE__ */ new Set());
-    __publicField(this, "_storedReferencesByKey", /* @__PURE__ */ new Map());
-    __publicField(this, "_hasPendingChanges", false);
-    this._objectInfo = _objectInfo;
-  }
-  static canSerialize(instanceOrTypeId) {
-    throw new Error("Not implemented");
-  }
-  get hasPendingChanges() {
-    return this._hasPendingChanges;
-  }
-  set hasPendingChanges(value) {
-    if (this._hasPendingChanges)
-      return;
-    this._hasPendingChanges = value;
-    this.reportPendingMessages();
-  }
-  get objectId() {
-    return this._objectInfo.objectId;
-  }
-  get instance() {
-    return this._objectInfo.instance;
-  }
-  set instance(value) {
-    this._objectInfo.instance = value;
-    this.onInstanceSet(true);
-  }
-  onInstanceSet(createdByCreateObjectMessage) {
-    if (!createdByCreateObjectMessage) {
-      this.reportPendingMessages();
-    }
-  }
-  get clients() {
-    return this._clients;
-  }
-  onClientRemoved(clientToken) {
-    this._clients.delete(clientToken);
-    this._storedReferencesByKey.forEach((storedReferencesByClient, key) => {
-      const storedReference = storedReferencesByClient.get(clientToken);
-      storedReference?.dispose();
-    });
-  }
-  clearStates(clientToken) {
-    if (!clientToken)
-      this._hasPendingChanges = false;
-  }
-  reportPendingMessages() {
-    this._objectInfo.owner.reportPendingMessagesForObject(this._objectInfo);
-  }
-  serializeValue(value, clientToken) {
-    return this._objectInfo.owner.serializeValue(value, clientToken);
-  }
-  deserializeValue(value, clientToken) {
-    return this._objectInfo.owner.deserializeValue(value, clientToken);
-  }
-  storeReference(settings) {
-    let storedReferencesByClient = this._storedReferencesByKey.get(settings.key);
-    if (!storedReferencesByClient) {
-      storedReferencesByClient = /* @__PURE__ */ new Map();
-      this._storedReferencesByKey.set(settings.key, storedReferencesByClient);
-    }
-    const previousStoredReference = storedReferencesByClient.get(settings.clientToken);
-    previousStoredReference?.dispose();
-    const disposables = [];
-    const values = "value" in settings ? [settings.value] : settings.values;
-    for (const value of values) {
-      if (isPrimitiveValue(value))
-        continue;
-      const storedReference = this._objectInfo.owner.trackInternal(value).addReference(settings.clientToken);
-      disposables.push(storedReference);
-    }
-    if (disposables.length === 0) {
-      return {
-        dispose() {
-        }
-      };
-    }
-    let isDisposed = false;
-    const finalStoredReference = {
-      dispose: () => {
-        if (isDisposed)
-          return;
-        isDisposed = true;
-        for (const disposable of disposables) {
-          disposable.dispose();
-        }
-        storedReferencesByClient.delete(settings.clientToken);
-        if (storedReferencesByClient.size === 0) {
-          this._storedReferencesByKey.delete(settings.key);
-        }
-      }
-    };
-    storedReferencesByClient.set(settings.clientToken, finalStoredReference);
-    return finalStoredReference;
-  }
-  clearStoredReferencesWithKey(key) {
-    const storedReferencesByClient = this._storedReferencesByKey.get(key);
-    if (storedReferencesByClient) {
-      storedReferencesByClient.forEach((storedReference) => {
-        storedReference.dispose();
-      });
-    }
-  }
-  clearStoredReferencesWithClientToken(clientToken) {
-    this._storedReferencesByKey.forEach((storedReferencesByClient) => {
-      const storedReference = storedReferencesByClient.get(clientToken);
-      storedReference?.dispose();
-    });
-  }
-  get dispatcher() {
-    return null;
-  }
-};
-var ExtendedTypeSerializer = class extends TypeSerializer {
-  constructor(objectInfo) {
-    super(objectInfo);
-    __publicField(this, "_messageTypeToHandler", /* @__PURE__ */ new Map());
-    this.registerMessageHandler("create", (message, clientToken) => this.onCreateMessageReceived(message, clientToken));
-    this.registerMessageHandler("change", (message, clientToken) => this.onChangeMessageReceived(message, clientToken));
-  }
-  registerMessageHandler(messageType, handler) {
-    this._messageTypeToHandler.set(messageType, handler);
-  }
-  async applyMessage(message, clientToken) {
-    const handler = this._messageTypeToHandler.get(message.type);
-    if (handler) {
-      await handler(message, clientToken);
-    } else if (message.type === "create") {
-      throw new Error(`No handler registered for message type '${message.type}' in serializer.`);
-    }
-  }
-  onChangeMessageReceived(message, clientToken) {
-  }
-};
+// build/serialization/simpleTypeSerializer.js
 function createSimpleTypeSerializerClass(settings) {
   const { type, typeId, serialize, deserialize } = settings;
   const result = class SimpleTypeSerializer extends ExtendedTypeSerializer {
@@ -287,16 +397,9 @@ function createSimpleTypeSerializerClass(settings) {
       return typeId;
     }
     generateMessages(clientToken, isNewClient) {
-      const messages = [];
-      if (isNewClient) {
-        messages.push({
-          type: "create",
-          objectId: this.objectId,
-          typeId,
-          data: serialize(this.instance)
-        });
-      }
-      return messages;
+      if (isNewClient)
+        return [this.createMessage("create", serialize(this.instance), clientToken)];
+      return [];
     }
     onCreateMessageReceived(message, clientToken) {
       this.instance = deserialize(message.data);
@@ -312,7 +415,97 @@ function createSimpleTypeSerializerClass(settings) {
   return result;
 }
 
-// build/decorators/syncMethod.js
+// build/serialization/serializers/syncObject/types.js
+var nothing = Symbol("nothing");
+
+// build/serialization/serializers/syncObject/decorators/syncObject.js
+var TRACKABLE_CONSTRUCTOR_INFO = Symbol("trackableConstructor");
+var allSyncObjectTypes = /* @__PURE__ */ new Set();
+function syncObject(settings) {
+  return function syncObject2(target, context) {
+    settings ?? (settings = {});
+    settings.typeId ?? (settings.typeId = context.name);
+    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
+    trackableInfo.typeId = settings.typeId;
+    trackableInfo.clientTypeId = settings.clientTypeId;
+    trackableInfo.constructorArguments = settings.constructorArguments;
+    if (settings.properties) {
+      for (const [propertyKey, propertySettings] of Object.entries(settings.properties)) {
+        trackableInfo.trackedProperties.set(propertyKey, {
+          ...propertySettings
+        });
+      }
+    }
+    if (settings.methods) {
+      for (const [methodKey, methodSettings] of Object.entries(settings.methods)) {
+        trackableInfo.trackedMethods.set(methodKey, {
+          ...methodSettings
+        });
+      }
+    }
+    allSyncObjectTypes.add(target);
+    defaultSerializersOrTypes.push(target);
+  };
+}
+function ensureTrackableConstructorInfo(metadata) {
+  const oldTrackableInfo = metadata[TRACKABLE_CONSTRUCTOR_INFO] ?? {
+    trackedProperties: /* @__PURE__ */ new Map(),
+    trackedMethods: /* @__PURE__ */ new Map(),
+    isAutoTrackable: false,
+    clientTypeId: void 0
+  };
+  const newTrackableInfo = {
+    trackedProperties: new Map(oldTrackableInfo.trackedProperties),
+    trackedMethods: new Map(oldTrackableInfo.trackedMethods),
+    typeId: oldTrackableInfo.typeId,
+    clientTypeId: oldTrackableInfo.clientTypeId
+  };
+  metadata[TRACKABLE_CONSTRUCTOR_INFO] = newTrackableInfo;
+  return newTrackableInfo;
+}
+function getTrackableTypeInfo(ctor) {
+  const trackableInfo = ctor[Symbol.metadata]?.[TRACKABLE_CONSTRUCTOR_INFO];
+  return trackableInfo ?? null;
+}
+function beforeSendObjectToClient(constructor, instance, typeId, destinationClientToken) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return nothing;
+  }
+  if (constructorInfo.clientTypeId === void 0) {
+    return typeId;
+  }
+  if (constructorInfo.clientTypeId === null || constructorInfo.clientTypeId === nothing) {
+    return nothing;
+  }
+  if (typeof constructorInfo.clientTypeId === "string") {
+    return constructorInfo.clientTypeId;
+  }
+  if (typeof constructorInfo.clientTypeId !== "function") {
+    throw new Error(`Invalid clientTypeId in trackable constructor info.`);
+  }
+  const newConstructorInfo = getTrackableTypeInfo(constructorInfo.clientTypeId);
+  if (newConstructorInfo && newConstructorInfo.typeId) {
+    return newConstructorInfo.typeId;
+  }
+  const result = constructorInfo.clientTypeId.call(instance, { instance, constructor, typeId, destinationClientToken });
+  if (result === null || result === void 0 || result === nothing) {
+    return nothing;
+  }
+  if (typeof result === "string") {
+    return result;
+  }
+  if (typeof result === "function") {
+    const newConstructorInfo2 = getTrackableTypeInfo(result);
+    if (newConstructorInfo2 && newConstructorInfo2.typeId) {
+      return newConstructorInfo2.typeId;
+    }
+    throw new Error(`The constructor returned from beforeSendToClient does not have a typeId.`);
+  }
+  return typeId;
+}
+
+// build/serialization/serializers/syncObject/decorators/syncMethod.js
 function syncMethod(settings) {
   settings ?? (settings = {});
   return function syncMethod2(target, context) {
@@ -347,39 +540,95 @@ function getSyncMethodInfo(constructor, propertyKey) {
   return propertyInfo ?? null;
 }
 
+// build/serialization/serializers/syncObject/metaInfo.js
+var ObjectSyncMetaInfo = class extends MetaInfo {
+  reportPropertyChanged(instance, propertyInfo, propertyKey, value) {
+    this.emit("propertyChanged", propertyInfo, instance, propertyKey, value);
+  }
+};
+
+// build/serialization/serializers/syncObject/decorators/syncProperty.js
+function syncProperty(settings) {
+  settings ?? (settings = {});
+  return function syncProperty2(target, context) {
+    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
+    const propertyInfo = {
+      ...settings
+    };
+    const propertyName = context.name;
+    trackableInfo.trackedProperties.set(propertyName, propertyInfo);
+    const result = {
+      set(value) {
+        target.set.call(this, value);
+        if (propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly")
+          return;
+        const metaInfo = getMetaInfo(this, ObjectSyncMetaInfo);
+        metaInfo?.reportPropertyChanged(this, propertyInfo, propertyName, value);
+      }
+    };
+    return result;
+  };
+}
+function checkCanApplyProperty(constructor, instance, propertyKey, isMethod, sourceClientToken) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo)
+    return false;
+  const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
+  if (!propertyInfo)
+    return false;
+  if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly")
+    return;
+  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientToken }) === false)
+    return false;
+  return true;
+}
+function beforeSendPropertyToClient(constructor, instance, propertyKey, value, destinationClientToken) {
+  const constructorInfo = getTrackableTypeInfo(constructor);
+  if (!constructorInfo) {
+    return {
+      skip: true
+    };
+  }
+  const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
+  if (!propertyInfo) {
+    return {
+      skip: true
+    };
+  }
+  if (!propertyInfo.beforeSendToClient) {
+    return {
+      value
+    };
+  }
+  const result = propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientToken });
+  if (result === nothing) {
+    return {
+      skip: true
+    };
+  }
+  return {
+    value: result
+  };
+}
+
 // build/serialization/serializers/syncObject/serializer.js
 var SyncObjectSerializer = class extends ExtendedTypeSerializer {
-  constructor(objectInfo) {
+  constructor(objectInfo, _typeId) {
     super(objectInfo);
+    __publicField(this, "_typeId");
     __publicField(this, "_typeInfo", null);
     __publicField(this, "_properties", /* @__PURE__ */ new Map());
-    __publicField(this, "_temporaryReferencesByClient", /* @__PURE__ */ new Map());
     __publicField(this, "_pendingInvokeMethodInfosById", /* @__PURE__ */ new Map());
     __publicField(this, "_methodInvokeResultsByClient", /* @__PURE__ */ new Map());
     __publicField(this, "_nextInvokeId", 1);
     __publicField(this, "_dispatcher");
+    this._typeId = _typeId;
     this.registerMessageHandler("execute", (message, clientToken) => this.onExecuteMessageReceived(message, clientToken));
     this.registerMessageHandler("executeFinished", (message, clientToken) => this.onExecuteFinishedMessageReceived(message, clientToken));
   }
-  createTemporaryReference(value, clientToken) {
-    if (isPrimitiveValue(value)) {
-      return {
-        dispose() {
-        }
-      };
-    }
-    const storedReference = this._objectInfo.owner.trackInternal(value).addReference(clientToken);
-    let tempRefs = this._temporaryReferencesByClient.get(clientToken);
-    if (!tempRefs) {
-      tempRefs = [];
-      this._temporaryReferencesByClient.set(clientToken, tempRefs);
-    }
-    tempRefs.push(storedReference);
-    return storedReference;
-  }
   onInstanceSet(createdByCreateObjectMessage) {
     super.onInstanceSet(createdByCreateObjectMessage);
-    const metaInfo = ensureObjectSyncMetaInfo(this.instance);
+    const metaInfo = getMetaInfo(this.instance, ObjectSyncMetaInfo, true);
     metaInfo?.on("propertyChanged", (propertyInfo, instance, propertyKey, value) => {
       this.reportPropertyChanged(propertyInfo, propertyKey, value);
     });
@@ -427,9 +676,9 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
         this._methodInvokeResultsByClient.set(clientToken, methodInvokeResults);
       }
       if (error)
-        methodInvokeResults.push({ objectId: message.objectId, invokeId: message.id, error });
+        methodInvokeResults.push({ objectId: message.objectId, invokeId: message.invokeId, error });
       else
-        methodInvokeResults.push({ objectId: message.objectId, invokeId: message.id, result });
+        methodInvokeResults.push({ objectId: message.objectId, invokeId: message.invokeId, result });
       this.reportPendingMessages();
     };
     if (!checkCanApplyProperty(this.instance.constructor, this.instance, message.method, true, clientToken)) {
@@ -483,14 +732,13 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
           propertiesToOmit.add(propertyKey);
           const propertyValueInfo = this._properties.get(propertyKey);
           if (!propertyValueInfo) {
-            throw new Error(`Cannot use property '${propertyKey}' as constructor argument for type '${this.typeId}' because it is not a tracked property.`);
+            throw new Error(`Cannot use property '${propertyKey}' as constructor argument for type '${this._typeId}' because it is not a tracked property.`);
           }
           const value = propertyValueInfo.value;
           const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor, this.instance, propertyKey, value, clientToken);
           if (beforeSendResult.skip)
             return;
-          this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
-          finalConstructorArguments.push(this.serializeValue(beforeSendResult.value, clientToken));
+          finalConstructorArguments.push(this.serializeValue({ value: beforeSendResult.value, key: propertyKey, clientToken }));
         });
       } else {
         if (constructorArgumentsResult.propertiesToOmit) {
@@ -511,16 +759,9 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
       const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor, this.instance, propertyKey, value, clientToken);
       if (beforeSendResult.skip)
         return;
-      this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
-      data[propertyKey] = this.serializeValue(beforeSendResult.value, clientToken);
+      data[propertyKey] = this.serializeValue({ value: beforeSendResult.value, key: propertyKey, clientToken });
     });
-    const createMessage = {
-      type: "create",
-      objectId: this.objectId,
-      typeId,
-      data
-    };
-    return createMessage;
+    return this.createMessage("create", data, typeId);
   }
   generateChangeMessage(clientToken) {
     const data = {};
@@ -532,19 +773,13 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
       const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor, this.instance, propertyKey, value, clientToken);
       if (beforeSendResult.skip)
         return;
-      this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
-      const transformedValue = this.serializeValue(beforeSendResult.value, clientToken);
+      const transformedValue = this.serializeValue({ value: beforeSendResult.value, key: propertyKey, clientToken });
       data[propertyKey] = transformedValue;
       hasDataToSend = true;
     });
     if (!hasDataToSend)
       return null;
-    const changeMessage = {
-      type: "change",
-      objectId: this.objectId,
-      data
-    };
-    return changeMessage;
+    return this.createMessage("change", data);
   }
   generateMessages(clientToken, isNewClient) {
     const result = [];
@@ -570,19 +805,13 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
     if (methodInvokeResults) {
       this._methodInvokeResultsByClient.delete(clientToken);
       for (const methodInvokeResult of methodInvokeResults ?? []) {
-        const executeFinishedMessage = {
-          type: "executeFinished",
-          objectId: methodInvokeResult.objectId,
+        const executeFinishedMessage = this.createMessage("executeFinished", {
           invokeId: methodInvokeResult.invokeId
-        };
-        if ("result" in methodInvokeResult) {
-          this.createTemporaryReference(methodInvokeResult.result, clientToken);
+        });
+        if ("result" in methodInvokeResult)
           executeFinishedMessage.result = this.serializeValue(methodInvokeResult.result, clientToken);
-        }
-        if ("error" in methodInvokeResult) {
-          this.createTemporaryReference(methodInvokeResult.error, clientToken);
+        if ("error" in methodInvokeResult)
           executeFinishedMessage.error = this.serializeValue(methodInvokeResult.error, clientToken);
-        }
         result.push(executeFinishedMessage);
       }
     }
@@ -599,22 +828,19 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
         continue;
       }
       const parameters = args.map((arg) => {
-        this.createTemporaryReference(arg, clientToken);
         const transformedValue = this.serializeValue(arg, clientToken);
         return transformedValue;
       });
-      const executeMessage = {
-        id: pendingInvokeMethodInfos.id,
-        type: "execute",
-        objectId: this.objectId,
+      const executeMessage = this.createMessage("execute", {
+        invokeId: pendingInvokeMethodInfos.id,
         method: pendingInvokeMethodInfos.methodName,
         parameters
-      };
+      });
       result.push(executeMessage);
     }
   }
   getTypeId(clientToken) {
-    const typeIdOrNothing = beforeSendObjectToClient(this.type, this.instance, this.typeId, clientToken);
+    const typeIdOrNothing = beforeSendObjectToClient(this.type, this.instance, this._typeId, clientToken);
     if (typeIdOrNothing === nothing)
       return null;
     return typeIdOrNothing;
@@ -635,7 +861,7 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
     }
     if (current.value === value)
       return;
-    this.clearStoredReferencesWithKey(key);
+    this.clearStoredReferences(key);
     current.value = value;
     if (current.isBeeingApplied)
       return;
@@ -646,13 +872,6 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
     super.clearStates(clientToken);
     if (clientToken) {
       this._methodInvokeResultsByClient.delete(clientToken);
-      const tempRefs = this._temporaryReferencesByClient.get(clientToken);
-      if (tempRefs) {
-        for (const storedReference of tempRefs) {
-          storedReference.dispose();
-        }
-        this._temporaryReferencesByClient.delete(clientToken);
-      }
     } else {
       this._properties.forEach((property) => {
         property.hasPendingChanges = false;
@@ -703,36 +922,35 @@ var SyncObjectSerializer = class extends ExtendedTypeSerializer {
       return resultByClient;
     }
     const id = this._nextInvokeId++;
-    const promiseDataByClient = /* @__PURE__ */ new Map();
     const invokeMethodInfo = {
       id,
       methodName,
       parameters,
-      invokeMethodInfoByClient: promiseDataByClient
+      invokeMethodInfoByClient: /* @__PURE__ */ new Map()
     };
     forEachIterable(clients, (clientToken) => {
-      let resolve;
-      let reject;
-      const promise = new Promise((res, rej) => {
-        resolve = (data) => {
-          res(this.deserializeValue(data, clientToken));
-        };
-        reject = (data) => {
-          rej(this.deserializeValue(data, clientToken));
-        };
-      });
-      promise.finally(() => {
+      const onPromiseFinished = () => {
         invokeMethodInfo.invokeMethodInfoByClient.delete(clientToken);
         if (invokeMethodInfo.invokeMethodInfoByClient.size === 0) {
           this._pendingInvokeMethodInfosById.delete(id);
         }
+      };
+      const promise = new Promise((res, rej) => {
+        invokeMethodInfo.invokeMethodInfoByClient.set(clientToken, {
+          resolve: (data) => {
+            onPromiseFinished();
+            const result = this.deserializeValue(data, clientToken);
+            res(result);
+          },
+          reject: (data) => {
+            onPromiseFinished();
+            const error = this.deserializeValue(data, clientToken);
+            rej(error);
+          },
+          sentToClient: false
+        });
       });
       resultByClient.set(clientToken, promise);
-      promiseDataByClient.set(clientToken, {
-        resolve,
-        reject,
-        sentToClient: false
-      });
     });
     this._pendingInvokeMethodInfosById.set(invokeMethodInfo.id, invokeMethodInfo);
     this.reportPendingMessages();
@@ -757,37 +975,16 @@ function getSyncObjectSerializer(type) {
     get type() {
       return type;
     }
-    get typeId() {
-      return typeId;
-    }
     constructor(objectInfo) {
-      super(objectInfo);
+      super(objectInfo, typeId);
     }
   };
   serializersByType.set(type, TypedSyncObjectSerializer);
   return TypedSyncObjectSerializer;
 }
 
-// build/shared/metaInfo.js
-var metaInfoByInstance = /* @__PURE__ */ new WeakMap();
-var MetaInfo = class extends EventEmitter {
-};
-function getMetaInfo(instance, metaInfoType, metaInfoGeneratorOrCreateByConstructor) {
-  let metaInfo = metaInfoByInstance.get(instance) ?? null;
-  if (metaInfo) {
-    if (!(metaInfo instanceof metaInfoType))
-      return null;
-    return metaInfo;
-  }
-  if (metaInfoGeneratorOrCreateByConstructor === false || metaInfoGeneratorOrCreateByConstructor === void 0)
-    return null;
-  const metaInfoGenerator = typeof metaInfoGeneratorOrCreateByConstructor === "function" ? metaInfoGeneratorOrCreateByConstructor : void 0;
-  metaInfo = metaInfoGenerator ? metaInfoGenerator(instance) : new metaInfoType();
-  if (!metaInfo)
-    return null;
-  metaInfoByInstance.set(instance, metaInfo);
-  return metaInfo;
-}
+// build/shared/decorators.js
+Symbol.metadata ?? (Symbol.metadata = Symbol("metadata"));
 
 // build/serialization/serializers/array/metaInfo.js
 var SyncArrayMetaInfo = class extends MetaInfo {
@@ -863,7 +1060,9 @@ var SyncableArray = class extends Array {
   splice(start, deleteCount, ...items) {
     const actualStart = typeof start === "number" ? start : 0;
     const actualDeleteCount = typeof deleteCount === "number" ? deleteCount : this.length - actualStart;
-    const deletedItems = super.splice(actualStart, actualDeleteCount, ...items);
+    const deletedItems = withIgnoredSyncSplice(this, () => {
+      return super.splice(actualStart, actualDeleteCount, ...items);
+    });
     if (!isIgnoringSpliceGathering(this)) {
       const spliceInstruction = {
         start: actualStart,
@@ -1259,41 +1458,25 @@ var SyncableArraySerializerBase = class extends ExtendedTypeSerializer {
       }
     }
     if (isNewClient) {
-      this.clearStoredReferencesWithClientToken(clientToken);
-      const data = this.instance.map((element, index) => {
-        this.storeReference({ value: element, key: index, clientToken });
-        return this.serializeValue(element, clientToken);
-      });
-      const createMessage = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: this.getTypeId(clientToken),
-        data
-      };
-      messages.push(createMessage);
-    } else if (this.hasPendingChanges) {
-      this._temporaryChanges?.forEach((change) => {
-        for (let i = 0; i < change.deleteCount; i++) {
-          this.storeReference({ value: void 0, key: change.start + i, clientToken });
-        }
-        change.items.forEach((item, itemIndex) => {
-          this.storeReference({ value: item, key: change.start + itemIndex, clientToken });
-        });
-      });
-      const data = this._temporaryChanges.map((change) => ({
-        start: change.start,
-        deleteCount: change.deleteCount,
-        items: change.items.map((item) => {
-          const mappedValue = this.serializeValue(item, clientToken);
-          return mappedValue;
-        })
+      this.clearStoredReferences(clientToken);
+      const data = this.instance.map((element, index) => this.serializeValue({
+        clientToken,
+        value: element,
+        key: index
       }));
-      const changeMessage = {
-        type: "change",
-        objectId: this.objectId,
-        data
-      };
-      messages.push(changeMessage);
+      messages.push(this.createMessage("create", data, clientToken));
+    } else if (this.hasPendingChanges) {
+      const data = this._temporaryChanges.map((change) => {
+        for (let i = change.items.length; i < change.deleteCount; i++) {
+          this.clearStoredReferences(change.start + i, clientToken);
+        }
+        return {
+          start: change.start,
+          deleteCount: change.deleteCount,
+          items: change.items.map((item, itemIndex) => this.serializeValue({ value: item, key: change.start + itemIndex, clientToken }))
+        };
+      });
+      messages.push(this.createMessage("change", data));
     }
     return messages;
   }
@@ -1328,9 +1511,9 @@ var SyncableArraySerializerBase = class extends ExtendedTypeSerializer {
     return result;
   }
 };
-var ArraySerializer = createSerializerClass(SyncableArraySerializerBase, Array, TYPE_ID_NATIVEARRAY, true);
-var SyncableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableArray, TYPE_ID_SYNCARRAY, false);
 var SyncableObservableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableObservableArray, TYPE_ID_OBSERVABLEARRAY, false);
+var SyncableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableArray, TYPE_ID_SYNCARRAY, false);
+var ArraySerializer = createSerializerClass(SyncableArraySerializerBase, Array, TYPE_ID_NATIVEARRAY, true);
 
 // build/serialization/serializers/map/metaInfo.js
 var SyncMapMetaInfo = class extends MetaInfo {
@@ -1368,9 +1551,46 @@ var SyncableMap = class extends Map {
   }
 };
 
+// build/serialization/serializers/map/syncableObservableMap.js
+var SyncableObservableMap = class extends SyncableMap {
+  constructor() {
+    super(...arguments);
+    __publicField(this, "_eventEmitter", new EventEmitter());
+  }
+  set(key, value) {
+    super.set(key, value);
+    this._eventEmitter.emit("set", key, value);
+    return this;
+  }
+  clear() {
+    super.clear();
+    this._eventEmitter.emit("cleared");
+  }
+  delete(key) {
+    const result = super.delete(key);
+    if (result) {
+      this._eventEmitter.emit("deleted", key);
+    }
+    return result;
+  }
+  on(event, callback) {
+    this._eventEmitter.on(event, callback);
+  }
+  once(event, callback) {
+    this._eventEmitter.once(event, callback);
+  }
+  off(event, callback) {
+    this._eventEmitter.off(event, callback);
+  }
+  listenerCount(event, callback) {
+    return this._eventEmitter.listenerCount(event, callback);
+  }
+};
+
 // build/serialization/serializers/map/serializer.js
 var TYPE_ID_NATIVEMAP = "<nativeMap>";
 var TYPE_ID_SYNCABLEMAP = "<syncableMap>";
+var TYPE_ID_SYNCABLEOBSERVABLEMAP = "<syncableObservableMap>";
 var SyncableMapSerializerBase = class extends ExtendedTypeSerializer {
   constructor(_mapType, _typeId, objectInfo) {
     super(objectInfo);
@@ -1436,37 +1656,19 @@ var SyncableMapSerializerBase = class extends ExtendedTypeSerializer {
     }
   }
   generateMessages(clientToken, isNewClient) {
-    if (!isNewClient && !this.hasPendingChanges)
-      return [];
-    if (isNewClient) {
-      const message = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: this.getTypeId(clientToken),
-        data: this.getCreationData(clientToken)
-      };
-      return [message];
-    } else {
-      const message = {
-        type: "change",
-        objectId: this.objectId,
-        data: this.getChangeData(clientToken)
-      };
-      return [message];
-    }
+    if (isNewClient)
+      return [this.createMessage("create", this.getCreationData(clientToken), clientToken)];
+    else if (this.hasPendingChanges)
+      return [this.createMessage("change", this.getChangeData(clientToken))];
     return [];
   }
   getChangeData(clientToken) {
     return this._changes.map((change) => {
       if ("clear" in change) {
-        this.clearStoredReferencesWithClientToken(clientToken);
+        this.clearStoredReferences(clientToken);
         return { clear: true };
       } else if ("delete" in change) {
-        this.storeReference({
-          value: void 0,
-          key: change.key,
-          clientToken
-        });
+        this.clearStoredReferences(change.key, clientToken);
         const serializedKey = this.serializeValue(change.key, clientToken);
         return { key: serializedKey, delete: true };
       } else {
@@ -1475,14 +1677,17 @@ var SyncableMapSerializerBase = class extends ExtendedTypeSerializer {
           key: change.key,
           values: [change.key, change.value]
         });
-        const serializedKey = this.serializeValue(change.key, clientToken);
-        const serializedValue = this.serializeValue(change.value, clientToken);
-        return { key: serializedKey, value: serializedValue };
+        const [key, value] = this.serializeValue({
+          clientToken,
+          key: change.key,
+          values: [change.key, change.value]
+        });
+        return { key, value };
       }
     });
   }
   getCreationData(clientToken) {
-    this.clearStoredReferencesWithClientToken(clientToken);
+    this.clearStoredReferences(clientToken);
     const data = [];
     for (const [key, value] of this.instance) {
       this.storeReference({
@@ -1520,8 +1725,9 @@ var SyncableMapSerializerBase = class extends ExtendedTypeSerializer {
     return result;
   }
 };
-var MapSerializer = createSerializerClass(SyncableMapSerializerBase, Map, TYPE_ID_NATIVEMAP, true);
+var SyncableObservableMapSerializer = createSerializerClass(SyncableMapSerializerBase, SyncableObservableMap, TYPE_ID_SYNCABLEOBSERVABLEMAP, false);
 var SyncableMapSerializer = createSerializerClass(SyncableMapSerializerBase, SyncableMap, TYPE_ID_SYNCABLEMAP, false);
+var MapSerializer = createSerializerClass(SyncableMapSerializerBase, Map, TYPE_ID_NATIVEMAP, true);
 
 // build/serialization/serializers/set/metaInfo.js
 var SyncableSetMetaInfo = class extends MetaInfo {
@@ -1536,9 +1742,72 @@ var SyncableSetMetaInfo = class extends MetaInfo {
   }
 };
 
+// build/serialization/serializers/set/syncableSet.js
+var SyncableSet = class extends Set {
+  constructor(iterable) {
+    super(iterable);
+  }
+  add(value) {
+    const alreadyHas = this.has(value);
+    super.add(value);
+    if (!alreadyHas) {
+      getMetaInfo(this, SyncableSetMetaInfo)?.reportAdd(this, value);
+    }
+    return this;
+  }
+  clear() {
+    super.clear();
+    getMetaInfo(this, SyncableSetMetaInfo)?.reportClear(this);
+  }
+  delete(value) {
+    const result = super.delete(value);
+    if (result) {
+      getMetaInfo(this, SyncableSetMetaInfo)?.reportDelete(this, value);
+    }
+    return result;
+  }
+};
+
+// build/serialization/serializers/set/syncableObservableSet.js
+var SyncableObservableSet = class extends SyncableSet {
+  constructor() {
+    super(...arguments);
+    __publicField(this, "_eventEmitter", new EventEmitter());
+  }
+  add(value) {
+    super.add(value);
+    this._eventEmitter.emit("added", value);
+    return this;
+  }
+  clear() {
+    super.clear();
+    this._eventEmitter.emit("cleared");
+  }
+  delete(value) {
+    const result = super.delete(value);
+    if (result) {
+      this._eventEmitter.emit("deleted", value);
+    }
+    return result;
+  }
+  on(event, callback) {
+    this._eventEmitter.on(event, callback);
+  }
+  once(event, callback) {
+    this._eventEmitter.once(event, callback);
+  }
+  off(event, callback) {
+    this._eventEmitter.off(event, callback);
+  }
+  listenerCount(event, callback) {
+    return this._eventEmitter.listenerCount(event, callback);
+  }
+};
+
 // build/serialization/serializers/set/serializer.js
 var TYPE_ID_NATIVESET = "<nativeSet>";
 var TYPE_ID_SYNCABLESET = "<syncableSet>";
+var TYPE_ID_SYNCABLEOBSERVABLESET = "<syncableObservableSet>";
 var SyncableSetSerializerBase = class extends ExtendedTypeSerializer {
   constructor(_setType, _typeId, objectInfo) {
     super(objectInfo);
@@ -1603,60 +1872,36 @@ var SyncableSetSerializerBase = class extends ExtendedTypeSerializer {
     }
   }
   generateMessages(clientToken, isNewClient) {
-    if (!isNewClient && !this.hasPendingChanges)
-      return [];
-    if (isNewClient) {
-      const message = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: this.getTypeId(clientToken),
-        data: this.getCreationData(clientToken)
-      };
-      return [message];
-    } else {
-      const message = {
-        type: "change",
-        objectId: this.objectId,
-        data: this.getChangeData(clientToken)
-      };
-      return [message];
-    }
+    if (isNewClient)
+      return [this.createMessage("create", this.getCreationData(clientToken), clientToken)];
+    else if (this.hasPendingChanges)
+      return [this.createMessage("change", this.getChangeData(clientToken))];
     return [];
   }
   getChangeData(clientToken) {
     return this._changes.map((change) => {
       if ("clear" in change) {
-        this.clearStoredReferencesWithClientToken(clientToken);
+        this.clearStoredReferences(clientToken);
         return { clear: true };
       } else if ("delete" in change) {
-        this.storeReference({
-          value: void 0,
-          key: change.value,
-          clientToken
-        });
+        this.clearStoredReferences(change.value, clientToken);
         const serializedValue = this.serializeValue(change.value, clientToken);
         return { value: serializedValue, delete: true };
       } else {
-        this.storeReference({
+        const serializedValue = this.serializeValue({
           clientToken,
           key: change.value,
           value: change.value
         });
-        const serializedValue = this.serializeValue(change.value, clientToken);
         return { value: serializedValue };
       }
     });
   }
   getCreationData(clientToken) {
-    this.clearStoredReferencesWithClientToken(clientToken);
+    this.clearStoredReferences(clientToken);
     const data = [];
     for (const value of this.instance) {
-      this.storeReference({
-        clientToken,
-        key: value,
-        value
-      });
-      const serializedValue = this.serializeValue(value, clientToken);
+      const serializedValue = this.serializeValue({ value, key: value, clientToken });
       data.push(serializedValue);
     }
     return data;
@@ -1685,26 +1930,95 @@ var SyncableSetSerializerBase = class extends ExtendedTypeSerializer {
     return result;
   }
 };
+var SyncableObservableSetSerializer = createSerializerClass(SyncableSetSerializerBase, SyncableObservableSet, TYPE_ID_SYNCABLEOBSERVABLESET, false);
+var SyncableSetSerializer = createSerializerClass(SyncableSetSerializerBase, SyncableSet, TYPE_ID_SYNCABLESET, false);
 var SetSerializer = createSerializerClass(SyncableSetSerializerBase, Set, TYPE_ID_NATIVESET, true);
-var SyncableSetSerializer = createSerializerClass(SyncableSetSerializerBase, Set, TYPE_ID_SYNCABLESET, false);
 
-// build/serialization/serializers/object.js
-var TYPE_ID = "<object>";
-var ObjectSerializer = class extends ExtendedTypeSerializer {
+// build/serialization/serializers/error.js
+var TYPE_ID = "<error>";
+var ErrorSerializer = class extends ExtendedTypeSerializer {
   static canSerialize(instanceOrTypeId) {
     if (typeof instanceOrTypeId === "string") {
       return instanceOrTypeId === TYPE_ID;
     }
-    return typeof instanceOrTypeId === "object";
-  }
-  constructor(objectInfo) {
-    super(objectInfo);
-  }
-  onInstanceSet(createdByCreateObjectMessage) {
-    super.onInstanceSet(createdByCreateObjectMessage);
+    return instanceOrTypeId instanceof Error;
   }
   getTypeId(clientToken) {
     return TYPE_ID;
+  }
+  onCreateMessageReceived(message, clientToken) {
+    switch (message.data.type) {
+      case "EvalError":
+        this.instance = new EvalError(message.data.message);
+        break;
+      case "RangeError":
+        this.instance = new RangeError(message.data.message);
+        break;
+      case "ReferenceError":
+        this.instance = new ReferenceError(message.data.message);
+        break;
+      case "SyntaxError":
+        this.instance = new SyntaxError(message.data.message);
+        break;
+      case "TypeError":
+        this.instance = new TypeError(message.data.message);
+        break;
+      case "URIError":
+        this.instance = new URIError(message.data.message);
+        break;
+      case "AggregateError":
+        this.instance = new AggregateError([], message.data.message);
+        break;
+      default:
+        this.instance = new Error(message.data.message);
+        if (this.instance.name !== message.data.name)
+          this.instance.name = message.data.name;
+        break;
+    }
+    if (message.data.errors) {
+      message.data.errors.forEach((serializedValue) => {
+        const deserializedError = this.deserializeValue(serializedValue, clientToken);
+        this.instance.errors.push(deserializedError);
+      });
+    }
+    if (message.data.stack)
+      this.instance.stack = message.data.stack;
+    if (message.data.cause)
+      this.instance.cause = this.deserializeValue(message.data.cause, clientToken);
+  }
+  generateMessages(clientToken, isNewClient) {
+    if (isNewClient) {
+      return [this.createMessage("create", this.getCreationData(clientToken), clientToken)];
+    }
+    return [];
+  }
+  getCreationData(clientToken) {
+    return {
+      message: this.instance.message.toString(),
+      name: this.instance.name.toString(),
+      stack: this.instance.stack?.toString(),
+      type: this.instance.constructor.name.toString(),
+      errors: this.instance instanceof AggregateError ? this.instance.errors.filter((e) => e instanceof Error).map((e) => this.serializeValue(e, clientToken)) : void 0,
+      cause: this.instance.cause instanceof Error ? this.serializeValue(this.instance.cause, clientToken) : void 0
+    };
+  }
+};
+defaultIntrinsicSerializers.push(ErrorSerializer);
+
+// build/serialization/serializers/object.js
+var TYPE_ID2 = "<object>";
+var ObjectSerializer = class extends ExtendedTypeSerializer {
+  static canSerialize(instanceOrTypeId) {
+    if (typeof instanceOrTypeId === "string") {
+      return instanceOrTypeId === TYPE_ID2;
+    }
+    return typeof instanceOrTypeId === "object";
+  }
+  getTypeId(clientToken) {
+    return TYPE_ID2;
+  }
+  onInstanceSet(createdByCreateObjectMessage) {
+    super.onInstanceSet(createdByCreateObjectMessage);
   }
   onCreateMessageReceived(message, clientToken) {
     this.instance = {};
@@ -1716,218 +2030,25 @@ var ObjectSerializer = class extends ExtendedTypeSerializer {
     }
   }
   generateMessages(clientToken, isNewClient) {
-    if (!isNewClient && !this.hasPendingChanges)
-      return [];
-    const message = {
-      type: isNewClient ? "create" : "change",
-      objectId: this.objectId,
-      typeId: isNewClient ? TYPE_ID : void 0,
-      data: this.getSerializedData(clientToken)
-    };
-    return [message];
+    if (isNewClient)
+      return [this.createMessage("create", this.getSerializedData(clientToken), clientToken)];
+    else if (this.hasPendingChanges)
+      return [this.createMessage("change", this.getSerializedData(clientToken))];
+    return [];
   }
   getSerializedData(clientToken) {
-    this.clearStoredReferencesWithClientToken(clientToken);
+    this.clearStoredReferences(clientToken);
     const data = {};
     for (const key of Object.keys(this.instance)) {
       const value = this.instance[key];
-      this.storeReference({ value, key, clientToken });
-      const mappedValue = this.serializeValue(value, clientToken);
-      data[key] = mappedValue;
+      data[key] = this.serializeValue({ value, key, clientToken });
     }
     return data;
   }
 };
 defaultIntrinsicSerializers.push(ObjectSerializer);
 
-// build/decorators/syncObject.js
-var TRACKABLE_CONSTRUCTOR_INFO = Symbol("trackableConstructor");
-var allSyncObjectTypes = /* @__PURE__ */ new Set();
-function syncObject(settings) {
-  return function syncObject2(target, context) {
-    settings ?? (settings = {});
-    settings.typeId ?? (settings.typeId = context.name);
-    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
-    trackableInfo.typeId = settings.typeId;
-    trackableInfo.clientTypeId = settings.clientTypeId;
-    trackableInfo.constructorArguments = settings.constructorArguments;
-    if (settings.properties) {
-      for (const [propertyKey, propertySettings] of Object.entries(settings.properties)) {
-        trackableInfo.trackedProperties.set(propertyKey, {
-          ...propertySettings
-        });
-      }
-    }
-    if (settings.methods) {
-      for (const [methodKey, methodSettings] of Object.entries(settings.methods)) {
-        trackableInfo.trackedMethods.set(methodKey, {
-          ...methodSettings
-        });
-      }
-    }
-    allSyncObjectTypes.add(target);
-    defaultSerializersOrTypes.push(target);
-  };
-}
-function ensureTrackableConstructorInfo(metadata) {
-  const oldTrackableInfo = metadata[TRACKABLE_CONSTRUCTOR_INFO] ?? {
-    trackedProperties: /* @__PURE__ */ new Map(),
-    trackedMethods: /* @__PURE__ */ new Map(),
-    isAutoTrackable: false,
-    clientTypeId: void 0
-  };
-  const newTrackableInfo = {
-    trackedProperties: new Map(oldTrackableInfo.trackedProperties),
-    trackedMethods: new Map(oldTrackableInfo.trackedMethods),
-    typeId: oldTrackableInfo.typeId,
-    clientTypeId: oldTrackableInfo.clientTypeId
-  };
-  metadata[TRACKABLE_CONSTRUCTOR_INFO] = newTrackableInfo;
-  return newTrackableInfo;
-}
-function getTrackableTypeInfo(ctor) {
-  const trackableInfo = ctor[Symbol.metadata]?.[TRACKABLE_CONSTRUCTOR_INFO];
-  return trackableInfo ?? null;
-}
-function beforeSendObjectToClient(constructor, instance, typeId, destinationClientToken) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return nothing;
-  }
-  if (constructorInfo.clientTypeId === void 0) {
-    return typeId;
-  }
-  if (constructorInfo.clientTypeId === null || constructorInfo.clientTypeId === nothing) {
-    return nothing;
-  }
-  if (typeof constructorInfo.clientTypeId === "string") {
-    return constructorInfo.clientTypeId;
-  }
-  if (typeof constructorInfo.clientTypeId !== "function") {
-    throw new Error(`Invalid clientTypeId in trackable constructor info.`);
-  }
-  const newConstructorInfo = getTrackableTypeInfo(constructorInfo.clientTypeId);
-  if (newConstructorInfo && newConstructorInfo.typeId) {
-    return newConstructorInfo.typeId;
-  }
-  const result = constructorInfo.clientTypeId.call(instance, { instance, constructor, typeId, destinationClientToken });
-  if (result === null || result === void 0 || result === nothing) {
-    return nothing;
-  }
-  if (typeof result === "string") {
-    return result;
-  }
-  if (typeof result === "function") {
-    const newConstructorInfo2 = getTrackableTypeInfo(result);
-    if (newConstructorInfo2 && newConstructorInfo2.typeId) {
-      return newConstructorInfo2.typeId;
-    }
-    throw new Error(`The constructor returned from beforeSendToClient does not have a typeId.`);
-  }
-  return typeId;
-}
-
-// build/decorators/syncProperty.js
-function syncProperty(settings) {
-  settings ?? (settings = {});
-  return function syncProperty2(target, context) {
-    const trackableInfo = ensureTrackableConstructorInfo(context.metadata);
-    const propertyInfo = {
-      ...settings
-    };
-    const propertyName = context.name;
-    trackableInfo.trackedProperties.set(propertyName, propertyInfo);
-    const result = {
-      set(value) {
-        target.set.call(this, value);
-        if (propertyInfo.mode === "none" || propertyInfo.mode === "applyOnly")
-          return;
-        const metaInfo = getObjectSyncMetaInfo(this);
-        metaInfo?.reportPropertyChanged(this, propertyInfo, propertyName, value);
-      }
-    };
-    return result;
-  };
-}
-function checkCanApplyProperty(constructor, instance, propertyKey, isMethod, sourceClientToken) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo)
-    return false;
-  const propertyInfo = isMethod ? constructorInfo.trackedMethods.get(propertyKey) : constructorInfo.trackedProperties.get(propertyKey);
-  if (!propertyInfo)
-    return false;
-  if (propertyInfo.mode === "none" || propertyInfo.mode === "trackOnly")
-    return;
-  if (propertyInfo.canApply?.call(instance, { instance, key: propertyKey, sourceClientToken }) === false)
-    return false;
-  return true;
-}
-function beforeSendPropertyToClient(constructor, instance, propertyKey, value, destinationClientToken) {
-  const constructorInfo = getTrackableTypeInfo(constructor);
-  if (!constructorInfo) {
-    return {
-      skip: true
-    };
-  }
-  const propertyInfo = constructorInfo.trackedProperties.get(propertyKey);
-  if (!propertyInfo) {
-    return {
-      skip: true
-    };
-  }
-  if (!propertyInfo.beforeSendToClient) {
-    return {
-      value
-    };
-  }
-  const result = propertyInfo.beforeSendToClient.call(instance, { instance, key: propertyKey, value, destinationClientToken });
-  if (result === nothing) {
-    return {
-      skip: true
-    };
-  }
-  return {
-    value: result
-  };
-}
-
-// build/shared/messages.js
-var isPropertyInfoSymbol = Symbol("isPropertyInfo");
-var CreateMessageType = "create";
-var ChangeMessageType = "change";
-var DeleteMessageType = "delete";
-var ExecuteMessageType = "execute";
-var ExecuteFinishedMessageType = "executeFinished";
-function isExecuteObjectMessage(message) {
-  return message.type === ExecuteMessageType;
-}
-function isChangeObjectMessage(message) {
-  return message.type === ChangeMessageType;
-}
-function isCreateObjectMessage(message) {
-  return message.type === CreateMessageType;
-}
-function isDeleteObjectMessage(message) {
-  return message.type === DeleteMessageType;
-}
-function isExecuteFinishedObjectMessage(message) {
-  return message.type === ExecuteFinishedMessageType;
-}
-
-// build/objectSync/clientFilter.js
-function isForClientToken(clientToken, filter) {
-  let hasDesignation = filter.identities === void 0 || clientToken.identity === void 0;
-  if (!hasDesignation) {
-    hasDesignation = hasInIterable(filter.identities, clientToken.identity);
-  }
-  let hasClientToken = filter.clientTokens === void 0;
-  if (!hasClientToken) {
-    hasClientToken = hasInIterable(filter.clientTokens, clientToken);
-  }
-  return filter.isExclusive === (hasDesignation && hasClientToken);
-}
-
-// build/shared/objectInfo.js
+// build/serialization/objectInfo.js
 var ObjectInfo = class {
   constructor(_owner, _objectId = null, instanceOrTypeId = null, _isRoot = false) {
     __publicField(this, "_owner");
@@ -1988,15 +2109,9 @@ var ObjectInfo = class {
   }
   addReference(clientToken) {
     this._referenceCountByClient.set(clientToken, (this._referenceCountByClient.get(clientToken) ?? 0) + 1);
-    let isDisposed = false;
-    return {
-      dispose: () => {
-        if (isDisposed)
-          return;
-        isDisposed = true;
-        this.removeReference(clientToken);
-      }
-    };
+    return createDisposable(() => {
+      this.removeReference(clientToken);
+    });
   }
   get isOrphaned() {
     if (this._isRoot || !this._isOwned)
@@ -2038,7 +2153,40 @@ var ObjectInfo = class {
   }
 };
 
-// build/shared/objectPool.js
+// build/serialization/decorators/syncSerializer.js
+function syncSerializer(settings) {
+  return function syncObject2(target, context) {
+    context.addInitializer(function() {
+      const serializerConstructor = target;
+      if ("canSerialize" in settings) {
+        serializerConstructor.canSerialize = settings.canSerialize;
+      } else {
+        serializerConstructor.canSerialize = function canSerialize(instanceOrTypeId) {
+          if (typeof instanceOrTypeId === "string") {
+            return instanceOrTypeId === settings.typeId;
+          } else {
+            return instanceOrTypeId instanceof settings.type;
+          }
+        };
+      }
+      if ("defaultIntrinsicSerializer" in settings && settings.defaultIntrinsicSerializer) {
+        defaultIntrinsicSerializers.unshift(serializerConstructor);
+      } else if (!("defaultSerializer" in settings) || settings.defaultSerializer) {
+        defaultSerializersOrTypes.unshift(serializerConstructor);
+      }
+      if (settings.type) {
+        Object.defineProperty(settings.type, getSerializerSymbol, {
+          value: () => serializerConstructor,
+          writable: true,
+          configurable: false,
+          enumerable: false
+        });
+      }
+    });
+  };
+}
+
+// build/objectSync/objectPool.js
 var ObjectPool = class {
   constructor() {
     __publicField(this, "_objectToInfo", /* @__PURE__ */ new Map());
@@ -2110,7 +2258,7 @@ var ObjectPool = class {
   }
 };
 
-// build/shared/weakObjectPool.js
+// build/objectSync/weakObjectPool.js
 var WeakObjectPool = class extends EventEmitter {
   constructor() {
     super();
@@ -2153,21 +2301,6 @@ var WeakObjectPool = class extends EventEmitter {
     return info;
   }
 };
-
-// build/serialization/utils.js
-function getTypeSerializerClass(possibleSerializer) {
-  if ("canSerialize" in possibleSerializer) {
-    return possibleSerializer;
-  }
-  if (getSerializerSymbol in possibleSerializer) {
-    return possibleSerializer[getSerializerSymbol]();
-  }
-  const typeInfo = getTrackableTypeInfo(possibleSerializer);
-  if (!typeInfo) {
-    throw new Error(`Type '${possibleSerializer.name}' is not registered as a trackable type and not a TypeSerializer. Either decorate it with @syncObject, ensure that the type is a TypeSerializer or add the getSerializer symbol which returns the TypeSerializer for the provided type.`);
-  }
-  return getSyncObjectSerializer(possibleSerializer);
-}
 
 // build/objectSync/objectSync.js
 var ObjectSync = class {
@@ -2214,8 +2347,8 @@ var ObjectSync = class {
       return `${this._settings.objectIdGeneratorSettings.prefix}-${this._nextObjectId++}`;
     }
   }
-  registerClient(settings) {
-    const clientToken = JSON.parse(JSON.stringify(settings));
+  registerClient(settingsOrIdentity) {
+    const clientToken = new ClientToken(typeof settingsOrIdentity === "string" ? settingsOrIdentity : settingsOrIdentity.identity);
     this._clients.add(clientToken);
     return clientToken;
   }
@@ -2250,14 +2383,32 @@ var ObjectSync = class {
     }
     info.isRoot = true;
     info.serializer.clients.add(this._ownClientToken);
+    const that = this;
+    return createDisposable(() => {
+      if (info.isRoot) {
+        info.isRoot = false;
+      }
+    }, {
+      get objectId() {
+        return info.objectId;
+      },
+      get instance() {
+        return that._objectPool.getObjectById(objectId);
+      }
+    });
+  }
+  getObjectId(instance) {
+    const info = this._objectPool.getInfoByObject(instance);
+    if (!info)
+      return null;
+    return info.objectId;
   }
   trackInternal(instance, objectId) {
     if (isPrimitiveValue(instance))
       return null;
     let info = this._objectPool.getInfoByObject(instance);
-    if (info) {
+    if (info)
       return info;
-    }
     if (this._settings.memoryManagementMode === "weak") {
       const info2 = this._weakObjectPool.extractByInstance(instance);
       if (info2) {
@@ -2302,17 +2453,22 @@ var ObjectSync = class {
     info.serializer.clients.add(clientToken);
     info.serializer.applyMessage(message, clientToken);
   }
-  async handleOtherMessage(message, clientToken) {
+  handleOtherMessage(message, clientToken) {
     const info = this._objectPool.getInfoById(message.objectId);
     if (!info)
       return;
-    await info.serializer.applyMessage(message, clientToken);
+    return info.serializer.applyMessage(message, clientToken);
   }
-  async handleDeleteMessage(message, clientToken) {
+  handleDeleteMessage(message, clientToken) {
     const info = this._objectPool.getInfoById(message.objectId);
     if (!info)
       return;
-    await info.serializer.applyMessage(message, clientToken);
+    const promiseOrVoid = info.serializer.applyMessage(message, clientToken);
+    if (promiseOrVoid instanceof Promise) {
+      return promiseOrVoid.then(() => {
+        this._objectPool.deleteById(message.objectId);
+      });
+    }
     this._objectPool.deleteById(message.objectId);
   }
   serializeValue(value, clientToken) {
@@ -2358,27 +2514,7 @@ var ObjectSync = class {
     if (this._clients.has(clientToken) === false) {
       throw new Error("Unknown client token received messages from.");
     }
-    messages.sort((a, b) => {
-      if (a.type === b.type)
-        return 0;
-      if (a.type === "create")
-        return -1;
-      if (b.type === "create")
-        return 1;
-      if (a.type === "change")
-        return -1;
-      if (b.type === "change")
-        return 1;
-      if (a.type === "execute")
-        return -1;
-      if (b.type === "execute")
-        return 1;
-      if (a.type === "delete")
-        return 1;
-      if (b.type === "delete")
-        return -1;
-      return 0;
-    });
+    this.sortMessages(messages);
     const creationMessages = messages.filter(isCreateObjectMessage);
     messages = messages.filter((m) => !isCreateObjectMessage(m));
     for (const creationMessage of creationMessages) {
@@ -2395,14 +2531,43 @@ var ObjectSync = class {
         await this.handleOtherMessage(message, clientToken);
     }
   }
+  sortMessages(messages) {
+    messages.sort((a, b) => {
+      if (a.type === b.type)
+        return 0;
+      if (a.type === CreateMessageType)
+        return -1;
+      if (b.type === CreateMessageType)
+        return 1;
+      if (a.type === ChangeMessageType)
+        return -1;
+      if (b.type === ChangeMessageType)
+        return 1;
+      if (a.type === ExecuteMessageType)
+        return -1;
+      if (b.type === ExecuteMessageType)
+        return 1;
+      if (a.type === ExecuteFinishedMessageType)
+        return -1;
+      if (b.type === ExecuteFinishedMessageType)
+        return 1;
+      if (a.type === DeleteMessageType)
+        return 1;
+      if (b.type === DeleteMessageType)
+        return -1;
+      return 0;
+    });
+  }
   clearStates() {
     this._objectPool.infos.forEach((info) => {
       info.serializer.clearStates();
     });
-    this._objectsWithPendingMessages.clear();
     this._objectPool.orphanedObjectInfos(this._ownClientToken).forEach((info) => {
+      if (this._objectsWithPendingMessages.has(info.instance))
+        return;
       this._objectPool.deleteByObject(info.instance);
     });
+    this._objectsWithPendingMessages.clear();
     this._pendingWeakDeletes.length = 0;
   }
   getMessages(clientOrClientsOrCallTick, clearNonClientStates = true) {
@@ -2441,7 +2606,8 @@ var ObjectSync = class {
       for (const serializer of serializersWhichsStatesNeedsToBeCleared)
         serializer.clearStates(clientToken);
       while (true) {
-        const noLongerTrackedByClient = this._objectPool.objectInfosToDelete(clientToken);
+        let noLongerTrackedByClient = this._objectPool.objectInfosToDelete(clientToken);
+        noLongerTrackedByClient = noLongerTrackedByClient.filter((o) => !this._objectsWithPendingMessages.has(o.instance));
         if (noLongerTrackedByClient.length === 0) {
           break;
         }
@@ -2524,6 +2690,19 @@ var ObjectSync = class {
     return dispatcher;
   }
 };
+function getTypeSerializerClass(possibleSerializer) {
+  if ("canSerialize" in possibleSerializer) {
+    return possibleSerializer;
+  }
+  if (getSerializerSymbol in possibleSerializer) {
+    return possibleSerializer[getSerializerSymbol]();
+  }
+  const typeInfo = getTrackableTypeInfo(possibleSerializer);
+  if (!typeInfo) {
+    throw new Error(`Type '${possibleSerializer.name}' is not registered as a trackable type and not a TypeSerializer. Either decorate it with @syncObject, ensure that the type is a TypeSerializer or add the getSerializer symbol which returns the TypeSerializer for the provided type.`);
+  }
+  return getSyncObjectSerializer(possibleSerializer);
+}
 
 // build/objectSync/standaloneSerialization.js
 function serializeValue(value, settings) {
@@ -2551,22 +2730,10 @@ function deserializeValue(data, settings) {
     return primitive.value;
   throw new Error("Deserialized data does not contain a root or primitive value");
 }
-async function deserializeValueAsync(data, settings) {
-  const hostSync = new ObjectSync({ ...settings, identity: settings?.clientIdentity ?? "client" });
-  const clientToken = hostSync.registerClient({ identity: settings?.identity ?? "host" });
-  const messages = JSON.parse(data);
-  await hostSync.applyMessagesAsync(messages, clientToken);
-  const root = hostSync.findOne("root");
-  if (root)
-    return root;
-  const primitive = hostSync.findOne("value");
-  if (primitive)
-    return primitive.value;
-  throw new Error("Deserialized data does not contain a root or primitive value");
-}
 export {
   ArraySerializer,
   ChangeMessageType,
+  ClientToken,
   CreateMessageType,
   DeleteMessageType,
   EventEmitter,
@@ -2579,17 +2746,21 @@ export {
   SetSerializer,
   SyncableArray,
   SyncableArraySerializer,
+  SyncableMap,
   SyncableMapSerializer,
   SyncableObservableArray,
   SyncableObservableArraySerializer,
+  SyncableObservableMap,
+  SyncableObservableMapSerializer,
+  SyncableObservableSet,
+  SyncableObservableSetSerializer,
+  SyncableSet,
   SyncableSetSerializer,
   TypeSerializer,
   createSimpleTypeSerializerClass,
   defaultIntrinsicSerializers,
   defaultSerializersOrTypes,
   deserializeValue,
-  deserializeValueAsync,
-  getTrackableTypeInfo,
   isChangeObjectMessage,
   isCreateObjectMessage,
   isDeleteObjectMessage,
@@ -2599,6 +2770,7 @@ export {
   serializeValue,
   syncMethod,
   syncObject,
-  syncProperty
+  syncProperty,
+  syncSerializer
 };
 //# sourceMappingURL=index.js.map

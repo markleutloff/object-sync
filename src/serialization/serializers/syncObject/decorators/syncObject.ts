@@ -1,13 +1,9 @@
-import "../shared/decorators.js";
-import { ObjectSync } from "../objectSync/objectSync.js";
-import { ResolvablePropertyInfos } from "../shared/messages.js";
-import { Constructor } from "../shared/types.js";
-import { ClientToken } from "../shared/clientToken.js";
-import { nothing } from "./base.js";
+import { Constructor, ClientToken, ResolvablePropertyInfos } from "../../../../shared/index.js";
+import type { ObjectSync } from "../../../../objectSync/objectSync.js";
 import { TrackedMethodInfo, TrackedMethodSettings } from "./syncMethod.js";
 import { TrackedPropertyInfo, TrackedPropertySettings } from "./syncProperty.js";
-import { getTypeSerializerClass } from "../serialization/utils.js";
-import { defaultSerializersOrTypes } from "../serialization/index.js";
+import { defaultSerializersOrTypes } from "../../base.js";
+import { nothing } from "../types.js";
 
 const TRACKABLE_CONSTRUCTOR_INFO = Symbol("trackableConstructor");
 

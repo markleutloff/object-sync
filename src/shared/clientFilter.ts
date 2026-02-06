@@ -1,5 +1,4 @@
-import { hasInIterable, OneOrMany } from "../shared/types.js";
-import { ClientToken } from "../shared/clientToken.js";
+import { ClientToken, hasInIterable, OneOrMany } from "./index.js";
 
 export type ClientTokenFilter = {
   /**

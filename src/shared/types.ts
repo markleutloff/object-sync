@@ -14,25 +14,38 @@ export function toIterable<T>(input: OneOrMany<T>, preferSet = false): Iterable<
 }
 
 export function forEachIterable<T>(input: OneOrMany<T>, callback: (item: T) => void): void {
-  for (const item of toIterable(input)) {
-    callback(item);
+  if (isIterable(input)) {
+    for (const item of input) {
+      callback(item);
+    }
+  } else {
+    callback(input);
   }
 }
 
 export function mapIterable<T, U>(input: OneOrMany<T>, mapper: (item: T) => U): U[] {
   const result: U[] = [];
-  for (const item of toIterable(input)) {
-    result.push(mapper(item));
+  if (isIterable(input)) {
+    for (const item of input) {
+      result.push(mapper(item));
+    }
+  } else {
+    result.push(mapper(input));
   }
-
   return result;
 }
 
 export function filterIterable<T>(input: OneOrMany<T>, predicate: (item: T) => boolean): T[] {
   const result: T[] = [];
-  for (const item of toIterable(input)) {
-    if (predicate(item)) {
-      result.push(item);
+  if (isIterable(input)) {
+    for (const item of input) {
+      if (predicate(item)) {
+        result.push(item);
+      }
+    }
+  } else {
+    if (predicate(input)) {
+      result.push(input);
     }
   }
 
@@ -40,23 +53,35 @@ export function filterIterable<T>(input: OneOrMany<T>, predicate: (item: T) => b
 }
 
 export function findInIterable<T>(input: OneOrMany<T>, predicate: (item: T) => boolean): T | undefined {
-  for (const item of toIterable(input)) {
-    if (predicate(item)) {
-      return item;
+  if (isIterable(input)) {
+    for (const item of input) {
+      if (predicate(item)) {
+        return item;
+      }
     }
+    return undefined;
+  } else {
+    return predicate(input) ? input : undefined;
   }
 }
 
 export function hasInIterable<T>(input: OneOrMany<T>, expected: T): boolean {
   if (input instanceof Set) {
     return input.has(expected);
-  }
-  for (const item of toIterable(input)) {
-    if (item === expected) {
-      return true;
+  } else if (input instanceof Map) {
+    return input.has(expected);
+  } else if (Array.isArray(input)) {
+    return input.includes(expected);
+  } else if (isIterable(input)) {
+    for (const item of input) {
+      if (item === expected) {
+        return true;
+      }
     }
+    return false;
+  } else {
+    return input === expected;
   }
-  return false;
 }
 
 export type Constructor<T = any> = { new (...args: any[]): T };

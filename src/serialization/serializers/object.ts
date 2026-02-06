@@ -1,8 +1,7 @@
-import { ChangeObjectMessage, CreateObjectMessage, Message } from "../../shared/messages.js";
-import { ExtendedTypeSerializer } from "../serializer.js";
+import { ChangeObjectMessage, CreateObjectMessage, Message, ClientToken } from "../../shared/index.js";
+import { ExtendedTypeSerializer } from "../extendedTypeSerializer.js";
 import { defaultIntrinsicSerializers } from "./base.js";
-import { ObjectInfo } from "../../shared/objectInfo.js";
-import { ClientToken } from "../../shared/clientToken.js";
+import { ObjectInfo } from "../objectInfo.js";
 
 type TInstance = object;
 type TPayload = object;
@@ -16,21 +15,12 @@ export class ObjectSerializer extends ExtendedTypeSerializer<TInstance, TPayload
     return typeof instanceOrTypeId === "object";
   }
 
-  constructor(objectInfo: ObjectInfo<TInstance>) {
-    super(objectInfo);
+  override getTypeId(clientToken: ClientToken): string {
+    return TYPE_ID;
   }
 
   override onInstanceSet(createdByCreateObjectMessage: boolean): void {
     super.onInstanceSet(createdByCreateObjectMessage);
-
-    //  for (const key of Object.keys(objectInfo.instance)) {
-    //     const value = (objectInfo.instance as any)[key];
-    //     this.storeReferenceBySettings({ value });
-    //   }
-  }
-
-  getTypeId(clientToken: ClientToken) {
-    return TYPE_ID;
   }
 
   onCreateMessageReceived(message: CreateObjectMessage<TPayload>, clientToken: ClientToken): void {
@@ -45,26 +35,18 @@ export class ObjectSerializer extends ExtendedTypeSerializer<TInstance, TPayload
   }
 
   generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
-    if (!isNewClient && !this.hasPendingChanges) return [];
-
-    const message: CreateObjectMessage<TPayload> | ChangeObjectMessage<TPayload> = {
-      type: isNewClient ? "create" : "change",
-      objectId: this.objectId,
-      typeId: (isNewClient ? TYPE_ID : undefined) as any,
-      data: this.getSerializedData(clientToken),
-    };
-    return [message];
+    if (isNewClient) return [this.createMessage("create", this.getSerializedData(clientToken), clientToken)];
+    else if (this.hasPendingChanges) return [this.createMessage("change", this.getSerializedData(clientToken))];
+    return [];
   }
 
   private getSerializedData(clientToken: ClientToken) {
-    this.clearStoredReferencesWithClientToken(clientToken);
+    this.clearStoredReferences(clientToken);
 
     const data: Record<string, any> = {};
     for (const key of Object.keys(this.instance)) {
       const value = (this.instance as any)[key];
-      this.storeReference({ value, key, clientToken });
-      const mappedValue = this.serializeValue(value, clientToken);
-      data[key] = mappedValue;
+      data[key] = this.serializeValue({ value, key, clientToken });
     }
     return data;
   }

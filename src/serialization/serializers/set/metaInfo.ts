@@ -1,4 +1,4 @@
-import { MetaInfo } from "../../../shared/metaInfo.js";
+import { MetaInfo } from "../../../shared/index.js";
 
 type SyncableSetMetaInfoEvents = {
   cleared(instance: Set<any>): void;

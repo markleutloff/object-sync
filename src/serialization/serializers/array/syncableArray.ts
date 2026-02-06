@@ -1,5 +1,5 @@
+import { getMetaInfo } from "../../../shared/index.js";
 import { SyncArrayMetaInfo } from "./metaInfo.js";
-import { getMetaInfo } from "../../../shared/metaInfo.js";
 import { SpliceInstructionEx } from "./changeSet.js";
 
 const realInstanceSymbol = Symbol("realInstanceSymbol");
@@ -76,7 +76,9 @@ export class SyncableArray<T = any> extends Array<T> {
     const actualStart = typeof start === "number" ? start : 0;
     const actualDeleteCount = typeof deleteCount === "number" ? deleteCount : this.length - actualStart;
 
-    const deletedItems = super.splice(actualStart, actualDeleteCount, ...items);
+    const deletedItems = withIgnoredSyncSplice(this, () => {
+      return super.splice(actualStart, actualDeleteCount, ...items);
+    });
 
     if (!isIgnoringSpliceGathering(this)) {
       const spliceInstruction: SpliceInstructionEx = {

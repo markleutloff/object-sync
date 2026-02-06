@@ -1,4 +1,4 @@
-import { SerializedValue } from "../serialization/serializedTypes.js";
+import { SerializedValue } from "./serializedValue.js";
 
 export const isPropertyInfoSymbol = Symbol("isPropertyInfo");
 
@@ -45,7 +45,7 @@ export type DeleteObjectMessage = Message & {
 
 export type ExecuteObjectMessage<TInstance extends object = any, TMethodName extends string & keyof TInstance = any> = Message & {
   type: typeof ExecuteMessageType;
-  id: unknown;
+  invokeId: unknown;
   method: TMethodName;
   parameters: SerializedValue[];
 };
@@ -74,21 +74,25 @@ export type MethodExecuteResult = {
 );
 
 export function isExecuteObjectMessage(message: Message): message is ExecuteObjectMessage {
-  return message.type === ExecuteMessageType;
+  return isObjectMessage(message, ExecuteMessageType);
 }
 
 export function isChangeObjectMessage(message: Message): message is ChangeObjectMessage {
-  return message.type === ChangeMessageType;
+  return isObjectMessage(message, ChangeMessageType);
 }
 
 export function isCreateObjectMessage(message: Message): message is CreateObjectMessage {
-  return message.type === CreateMessageType;
+  return isObjectMessage(message, CreateMessageType);
 }
 
 export function isDeleteObjectMessage(message: Message): message is DeleteObjectMessage {
-  return message.type === DeleteMessageType;
+  return isObjectMessage(message, DeleteMessageType);
 }
 
 export function isExecuteFinishedObjectMessage(message: Message): message is ExecuteFinishedObjectMessage {
-  return message.type === ExecuteFinishedMessageType;
+  return isObjectMessage(message, ExecuteFinishedMessageType);
+}
+
+export function isObjectMessage<TMessage extends Message>(message: Message, type: string): message is TMessage {
+  return message.type === type;
 }

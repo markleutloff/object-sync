@@ -97,4 +97,46 @@ describe("Basics", () => {
     assert.strictEqual(messages.filter((m) => m.type === "delete").length, 2, "Expected exactly 2 delete messages to be generated after deletion");
     assert.strictEqual(sourceSync.allTrackedObjects.length, 0, "Expected no tracked objects after untracking");
   });
+
+  it("should allow clients to send back own values", async () => {
+    const alphaSource = new Alpha();
+    const originalBeta = (alphaSource.beta = new Beta());
+    sourceSync.track(alphaSource);
+
+    await sendDataToDest();
+
+    const alphaDest = destSync.findOne(Alpha)!;
+    alphaDest.beta = new Beta();
+
+    await sendDataToSource();
+
+    const sourceBeta = alphaSource.beta;
+
+    assert(sourceBeta !== originalBeta, "Expected beta to be updated with new instance");
+  });
+
+  it("should allow clients to send back old values", async () => {
+    const alphaSource = new Alpha();
+    const originalBeta = (alphaSource.beta = new Beta());
+    sourceSync.track(alphaSource);
+    sourceSync.track(originalBeta);
+
+    await sendDataToDest();
+
+    const alphaDest = destSync.findOne(Alpha)!;
+    const betaDest = alphaDest.beta!;
+
+    alphaSource.beta = null;
+
+    await sendDataToDest();
+    assert.strictEqual(alphaDest.beta, null, "Expected beta to be null after change");
+
+    alphaDest.beta = betaDest;
+
+    await sendDataToSource();
+
+    const sourceBeta = alphaSource.beta;
+
+    assert(sourceBeta === originalBeta, "Expected beta to use the original instance");
+  });
 });

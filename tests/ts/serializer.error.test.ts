@@ -1,6 +1,14 @@
 import { describe, it, beforeEach } from "node:test";
-import { ObjectSync, ClientToken, Message } from "../../src/index.js";
+import { ObjectSync, ClientToken, Message, syncObject, syncMethod } from "../../src/index.js";
 import assert from "assert";
+
+@syncObject()
+class Alpha {
+  @syncMethod()
+  doSomething(a: string): string {
+    throw new Error(a);
+  }
+}
 
 class CustomError extends Error {
   public extra: string = "value";
@@ -37,6 +45,11 @@ describe("Error Serializer", () => {
   const sendDataToDest = async (messages?: Message[]) => {
     messages ??= sourceSync.getMessages(sourceSyncDestClientToken);
     await destSync.applyMessagesAsync(messages, destSyncDestClientToken);
+  };
+
+  const sendDataToSource = async (messages?: Message[]) => {
+    messages ??= destSync.getMessages(destSyncDestClientToken);
+    await sourceSync.applyMessagesAsync(messages, sourceSyncDestClientToken);
   };
 
   beforeEach(() => {
@@ -151,5 +164,25 @@ describe("Error Serializer", () => {
     assert(Boolean(destError.cause));
     assert.strictEqual((destError.cause as Error).message, causeError.message);
     assert.strictEqual((destError.cause as Error).stack, causeError.stack);
+  });
+
+  it("should transfer method invocation rejection results", async () => {
+    const alpha = new Alpha();
+    sourceSync.track(alpha, "main");
+
+    let catchedError: Error = null!;
+    sourceSync
+      .getDispatcher(alpha)!
+      .invoke(sourceSyncDestClientToken, "doSomething", "test error")
+      .catch((err) => {
+        catchedError = err;
+      });
+
+    await sendDataToDest();
+    await sendDataToSource();
+
+    assert(Boolean(catchedError));
+    assert((catchedError as any) instanceof Error);
+    assert.strictEqual((catchedError as Error).message, "test error");
   });
 });

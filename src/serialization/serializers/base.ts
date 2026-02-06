@@ -1,7 +1,7 @@
-import { ObjectInfo } from "../../shared/objectInfo.js";
-import { Constructor, AbstractConstructor } from "../../shared/types.js";
+import { Constructor, AbstractConstructor } from "../../shared/index.js";
 import { getSerializerSymbol, TypeSerializerConstructor } from "../serializedTypes.js";
-import { ExtendedTypeSerializer } from "../serializer.js";
+import { ExtendedTypeSerializer } from "../extendedTypeSerializer.js";
+import { ObjectInfo } from "../objectInfo.js";
 
 export const defaultIntrinsicSerializers: TypeSerializerConstructor[] = [];
 export const defaultSerializersOrTypes: (TypeSerializerConstructor | Constructor)[] = [];
@@ -24,7 +24,7 @@ export function createSerializerClass<TTypeSerializer extends ExtendedTypeSerial
     constructor(objectInfo: ObjectInfo) {
       super(constructor, typeId, objectInfo);
     }
-  } as TypeSerializerConstructor;
+  } as unknown as TypeSerializerConstructor;
 
   if (isInstrinsic) {
     defaultIntrinsicSerializers.push(result);

@@ -1,17 +1,61 @@
-import { CreateObjectMessage, DeleteObjectMessage, isCreateObjectMessage, isDeleteObjectMessage, Message } from "../shared/messages.js";
-import { ObjectInfo } from "../shared/objectInfo.js";
-import { ObjectPool } from "../shared/objectPool.js";
-import { Constructor, forEachIterable, isIterable, isPrimitiveValue, OneOrMany } from "../shared/types.js";
-import { ClientToken, ClientConnectionSettings } from "../shared/clientToken.js";
-import { defaultIntrinsicSerializers, defaultSerializersOrTypes } from "../serialization/serializers/base.js";
-import { ISyncObjectDispatcher } from "../serialization/serializers/syncObject/index.js";
-import { TypeSerializer } from "../serialization/serializer.js";
-import { ClientTokenFilter } from "./clientFilter.js";
-import { ISyncArrayDispatcher } from "../serialization/serializers/array/serializer.js";
-import { PrimitiveValue, ObjectReference, SerializedValue, TypeSerializerConstructor } from "../serialization/serializedTypes.js";
-import { WeakObjectPool } from "../shared/weakObjectPool.js";
+import {
+  ChangeMessageType,
+  CreateMessageType,
+  CreateObjectMessage,
+  DeleteMessageType,
+  DeleteObjectMessage,
+  ExecuteFinishedMessageType,
+  ExecuteMessageType,
+  isCreateObjectMessage,
+  isDeleteObjectMessage,
+  Message,
+  ClientToken,
+  ClientConnectionSettings,
+  createDisposable,
+  IDisposable,
+  Constructor,
+  forEachIterable,
+  isIterable,
+  isPrimitiveValue,
+  SerializedValue,
+  OneOrMany,
+} from "../shared/index.js";
+import {
+  defaultIntrinsicSerializers,
+  defaultSerializersOrTypes,
+  TypeSerializer,
+  ISyncObjectDispatcher,
+  IArrayDispatcher,
+  IMapDispatcher,
+  ISetDispatcher,
+  TypeSerializerConstructor,
+  ObjectInfo,
+  getSerializerSymbol,
+  getTrackableTypeInfo,
+  getSyncObjectSerializer,
+} from "../serialization/index.js";
+import { ObjectPool } from "./objectPool.js";
+import { ClientTokenFilter } from "../shared/clientFilter.js";
+import { WeakObjectPool } from "./weakObjectPool.js";
 import { ExchangeMessagesSettings, FinalizedObjectSyncSettings, ObjectSyncSettings } from "./types.js";
-import { getTypeSerializerClass } from "../serialization/utils.js";
+
+export type TrackedObjectDisposable<TInstance extends object> = IDisposable & {
+  readonly objectId: string;
+  readonly instance: TInstance | undefined;
+};
+
+type DispatcherType<TInstance> =
+  TInstance extends Array<infer TItem>
+    ? IArrayDispatcher<TItem>
+    : TInstance extends Set<infer TItem>
+      ? ISetDispatcher<TItem>
+      : TInstance extends Map<infer TKey, infer TValue>
+        ? IMapDispatcher<TKey, TValue>
+        : TInstance extends object
+          ? ISyncObjectDispatcher<TInstance>
+          : never;
+
+type DispatcherOrFallback<TDispatcher, TInstance> = TDispatcher extends null ? DispatcherType<TInstance> : TDispatcher;
 
 export class ObjectSync {
   private readonly _objectPool = new ObjectPool();
@@ -65,11 +109,20 @@ export class ObjectSync {
 
   /**
    * Registers a new client connection.
+   * @param identity The identity of the client connection.
+   * @returns The token to the newly registered client connection.
+   */
+  registerClient(identity: string): ClientToken;
+
+  /**
+   * Registers a new client connection.
    * @param settings Settings for the client connection.
    * @returns The token to the newly registered client connection.
    */
-  registerClient(settings: ClientConnectionSettings): ClientToken {
-    const clientToken = JSON.parse(JSON.stringify(settings));
+  registerClient(settings: ClientConnectionSettings): ClientToken;
+
+  registerClient(settingsOrIdentity: ClientConnectionSettings | string): ClientToken {
+    const clientToken = new ClientToken(typeof settingsOrIdentity === "string" ? settingsOrIdentity : settingsOrIdentity.identity);
     this._clients.add(clientToken);
     return clientToken;
   }
@@ -118,26 +171,57 @@ export class ObjectSync {
 
   /**
    * Tracks an object for synchronization.
-   * Must be called for root objects you want to track.
-   * TypeSerializers must call this with non-root objects they encounter.
+   * Must be called for root objects you want to track. Tracked root objects will never be automatically deleted.
    * @param instance The instance to track.
+   * @param objectId Optional object ID to use for the tracked object. If not provided, a new object ID will be generated.
+   * @return A disposable which can be used to untrack the object and access the tracked object's ID and instance (when still tracked).
    */
-  track(instance: object, objectId?: string): void {
+  track<T extends object>(instance: T, objectId?: string): TrackedObjectDisposable<T> {
     const info = this.trackInternal(instance, objectId);
     if (!info) {
       throw new Error("Cannot track primitive value as root.");
     }
     info.isRoot = true;
     info.serializer.clients.add(this._ownClientToken);
+
+    const that = this;
+    return createDisposable(
+      () => {
+        if (info.isRoot) {
+          info.isRoot = false;
+        }
+      },
+      {
+        get objectId() {
+          return info.objectId;
+        },
+        get instance() {
+          return that._objectPool.getObjectById<T>(objectId!);
+        },
+      },
+    );
+  }
+
+  /**
+   * Gets the object ID of a tracked object.
+   * @param instance The tracked object instance.
+   * @returns The object ID of the tracked object, or null if the object is not tracked.
+   */
+  getObjectId(instance: object): string | null {
+    const info = this._objectPool.getInfoByObject(instance);
+    if (!info) return null;
+    return info.objectId;
   }
 
   trackInternal(instance: object, objectId?: string): ObjectInfo | null {
+    // Primitives are not trackable
     if (isPrimitiveValue(instance)) return null;
-    let info = this._objectPool.getInfoByObject(instance);
-    if (info) {
-      return info;
-    }
 
+    // Grab directly by instance when possible, thats the easiest case and also the one we expect to be the most common
+    let info = this._objectPool.getInfoByObject(instance);
+    if (info) return info;
+
+    // Allow retracking from weak pool if enabled
     if (this._settings.memoryManagementMode === "weak") {
       const info = this._weakObjectPool!.extractByInstance(instance);
       if (info) {
@@ -146,6 +230,8 @@ export class ObjectSync {
       }
     }
 
+    // If objectId is provided, try to find the object by id. This happens when we already have an object id but without a set instance.
+    // Now we have a instance, we can set on the info and finish the serializer initialization.
     if (objectId !== undefined) {
       info = this._objectPool.getInfoById(objectId!);
       if (info) {
@@ -154,6 +240,7 @@ export class ObjectSync {
       }
     }
 
+    // Otherwise we create a new info for the instance, which will generate a new object id if needed.
     info = new ObjectInfo(this, objectId, instance);
     info.isOwned = true;
     this._objectPool.add(info);
@@ -164,7 +251,7 @@ export class ObjectSync {
 
   /**
    * Untracks an object from synchronization.
-   * A delete message will be sent to clients during the next message generation, after which the object will be fully removed.
+   * Untracked objects are no longer prevented from being deleted and will be removed from clients when they are no longer used by them.
    * @param instance The instance to untrack.
    * @return True if the instance was untracked, false if it was not being tracked as a root object.
    */
@@ -204,18 +291,23 @@ export class ObjectSync {
     info.serializer.applyMessage(message, clientToken);
   }
 
-  private async handleOtherMessage(message: Message, clientToken: ClientToken) {
+  private handleOtherMessage(message: Message, clientToken: ClientToken) {
     const info = this._objectPool.getInfoById(message.objectId);
     if (!info) return;
 
-    await info.serializer.applyMessage(message, clientToken);
+    return info.serializer.applyMessage(message, clientToken);
   }
 
-  private async handleDeleteMessage(message: DeleteObjectMessage, clientToken: ClientToken) {
+  private handleDeleteMessage(message: DeleteObjectMessage, clientToken: ClientToken) {
     const info = this._objectPool.getInfoById(message.objectId);
     if (!info) return;
 
-    await info.serializer.applyMessage(message, clientToken);
+    const promiseOrVoid = info.serializer.applyMessage(message, clientToken);
+    if (promiseOrVoid instanceof Promise) {
+      return promiseOrVoid.then(() => {
+        this._objectPool.deleteById(message.objectId);
+      });
+    }
     this._objectPool.deleteById(message.objectId);
   }
 
@@ -257,7 +349,16 @@ export class ObjectSync {
   }
 
   /**
-   * Applies messages from multiple clients.
+   * Applies messages from multiple clients asynchronously.
+   * That means that serializers can return promises which allows the feature to wait for method execution results for syncObject decorator targets.
+   * Messages are applied in a certain order:
+   * - First all create messages are applied in the order they are received, regardless of the client they come from.
+   *   This is to ensure that all objects are created before any changes are applied to them.
+   *   Some create messages may be used earlier than others if they are needed to create objects which are referenced by other messages,
+   *   but there is no guaranteed order between independent create messages.
+   * - Then change messages are applied in the order they are received.
+   * - Then execute messages are applied in the order they are received.
+   *
    * @param messagesByClient A map of client connections to messages.
    */
   public async applyMessagesAsync(messagesByClient: Map<ClientToken, Message[]>): Promise<void>;
@@ -282,18 +383,7 @@ export class ObjectSync {
       throw new Error("Unknown client token received messages from.");
     }
 
-    messages.sort((a, b) => {
-      if (a.type === b.type) return 0;
-      if (a.type === "create") return -1;
-      if (b.type === "create") return 1;
-      if (a.type === "change") return -1;
-      if (b.type === "change") return 1;
-      if (a.type === "execute") return -1;
-      if (b.type === "execute") return 1;
-      if (a.type === "delete") return 1;
-      if (b.type === "delete") return -1;
-      return 0;
-    });
+    this.sortMessages(messages);
 
     // extract all creation messages and remove them from the main list
     const creationMessages = messages.filter(isCreateObjectMessage);
@@ -316,6 +406,35 @@ export class ObjectSync {
     }
   }
 
+  private sortMessages(messages: Message[]) {
+    // Order:
+    // 1. Creation messages (in the order they are received, regardless of client)
+    // 2. Change messages (in the order they are received)
+    // 3. Execute messages (in the order they are received)
+    // 4. Execute finished messages (in the order they are received)
+    // 5. Everything unknown
+    // 6. Delete messages (in the order they are received)
+    messages.sort((a, b) => {
+      if (a.type === b.type) return 0;
+
+      if (a.type === CreateMessageType) return -1;
+      if (b.type === CreateMessageType) return 1;
+
+      if (a.type === ChangeMessageType) return -1;
+      if (b.type === ChangeMessageType) return 1;
+
+      if (a.type === ExecuteMessageType) return -1;
+      if (b.type === ExecuteMessageType) return 1;
+
+      if (a.type === ExecuteFinishedMessageType) return -1;
+      if (b.type === ExecuteFinishedMessageType) return 1;
+
+      if (a.type === DeleteMessageType) return 1;
+      if (b.type === DeleteMessageType) return -1;
+      return 0;
+    });
+  }
+
   /**
    * Clears internal states, which are needed to store changes between synchronization cycles. Should be called after messages have been collected for all clients.
    */
@@ -323,12 +442,13 @@ export class ObjectSync {
     this._objectPool.infos.forEach((info) => {
       info.serializer.clearStates();
     });
-    this._objectsWithPendingMessages.clear();
 
     this._objectPool.orphanedObjectInfos(this._ownClientToken).forEach((info) => {
+      if (this._objectsWithPendingMessages.has(info.instance!)) return;
       this._objectPool.deleteByObject(info.instance!);
     });
 
+    this._objectsWithPendingMessages.clear();
     this._pendingWeakDeletes.length = 0;
   }
 
@@ -406,7 +526,7 @@ export class ObjectSync {
       const serializersWhichsStatesNeedsToBeCleared: Set<TypeSerializer<any>> = new Set();
 
       for (const instance of this._objectsWithPendingMessages) {
-        const objectInfo = this.trackInternal(instance)!; //this._objectPool.getInfoByObject(instance)!;
+        const objectInfo = this.trackInternal(instance)!;
         if (!objectInfo.isForClientToken(clientToken)) continue;
         serializersWhichsStatesNeedsToBeCleared.add(objectInfo.serializer);
 
@@ -421,7 +541,8 @@ export class ObjectSync {
       for (const serializer of serializersWhichsStatesNeedsToBeCleared) serializer.clearStates(clientToken);
 
       while (true) {
-        const noLongerTrackedByClient = this._objectPool.objectInfosToDelete(clientToken);
+        let noLongerTrackedByClient = this._objectPool.objectInfosToDelete(clientToken);
+        noLongerTrackedByClient = noLongerTrackedByClient.filter((o) => !this._objectsWithPendingMessages.has(o.instance));
         if (noLongerTrackedByClient.length === 0) {
           break;
         }
@@ -549,6 +670,19 @@ export class ObjectSync {
   }
 }
 
-type DispatcherType<TInstance> = TInstance extends Array<infer TArrayItem> ? ISyncArrayDispatcher<TArrayItem> : TInstance extends object ? ISyncObjectDispatcher<TInstance> : never;
+function getTypeSerializerClass(possibleSerializer: Constructor | TypeSerializerConstructor): TypeSerializerConstructor {
+  if ("canSerialize" in possibleSerializer) {
+    return possibleSerializer;
+  }
+  if (getSerializerSymbol in possibleSerializer) {
+    return (possibleSerializer as any)[getSerializerSymbol]() as TypeSerializerConstructor;
+  }
+  const typeInfo = getTrackableTypeInfo(possibleSerializer);
+  if (!typeInfo) {
+    throw new Error(
+      `Type '${possibleSerializer.name}' is not registered as a trackable type and not a TypeSerializer. Either decorate it with @syncObject, ensure that the type is a TypeSerializer or add the getSerializer symbol which returns the TypeSerializer for the provided type.`,
+    );
+  }
 
-type DispatcherOrFallback<TDispatcher, TInstance> = TDispatcher extends null ? DispatcherType<TInstance> : TDispatcher;
+  return getSyncObjectSerializer(possibleSerializer);
+}

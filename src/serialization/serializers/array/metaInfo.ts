@@ -1,4 +1,4 @@
-import { MetaInfo } from "../../../shared/metaInfo.js";
+import { MetaInfo } from "../../../shared/index.js";
 import { SpliceInstructionEx } from "./changeSet.js";
 
 type SyncArrayMetaInfoEvents = {

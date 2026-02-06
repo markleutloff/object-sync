@@ -1,6 +1,5 @@
-import { TypeSerializerConstructor } from "../serialization/serializedTypes.js";
-import { Message } from "../shared/messages.js";
-import { Constructor } from "../shared/types.js";
+import { TypeSerializerConstructor } from "../serialization/index.js";
+import { Message, Constructor } from "../shared/index.js";
 import { ObjectSync } from "./objectSync.js";
 import { ObjectIdGeneratorSettings } from "./types.js";
 
@@ -68,26 +67,6 @@ export function deserializeValue<TValue = any>(data: string, settings?: Standalo
   const clientToken = hostSync.registerClient({ identity: settings?.identity ?? "host" });
   const messages = JSON.parse(data) as Message[];
   hostSync.applyMessagesAsync(messages, clientToken);
-
-  const root = hostSync.findOne("root");
-  if (root) return root as TValue;
-  const primitive = hostSync.findOne("value");
-  if (primitive) return (primitive as any).value as TValue;
-  throw new Error("Deserialized data does not contain a root or primitive value");
-}
-
-/**
- * Asynchronously deserializes the given string back into an object that was previously serialized using `serializeValue`.
- * Useful when custom asynchronous type serializers are involved.
- * @param data - The serialized string representation of the object.
- * @param settings - Optional settings for deserialization.
- * @returns A promise that resolves to the deserialized object.
- */
-export async function deserializeValueAsync<TValue extends object = any>(data: string, settings?: StandaloneSerializationSettings) {
-  const hostSync = new ObjectSync({ ...settings, identity: settings?.clientIdentity ?? "client" });
-  const clientToken = hostSync.registerClient({ identity: settings?.identity ?? "host" });
-  const messages = JSON.parse(data) as Message[];
-  await hostSync.applyMessagesAsync(messages, clientToken);
 
   const root = hostSync.findOne("root");
   if (root) return root as TValue;

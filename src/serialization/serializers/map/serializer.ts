@@ -1,13 +1,10 @@
-import { ChangeObjectMessage, CreateObjectMessage, Message } from "../../../shared/messages.js";
-import { ExtendedTypeSerializer } from "../../serializer.js";
+import { getMetaInfo, SerializedValue, Constructor, ClientToken, ChangeObjectMessage, CreateObjectMessage, Message } from "../../../shared/index.js";
+import { ExtendedTypeSerializer } from "../../extendedTypeSerializer.js";
 import { createSerializerClass } from "../base.js";
-import { ObjectInfo } from "../../../shared/objectInfo.js";
-import { ClientToken } from "../../../shared/clientToken.js";
-import { SyncableMap } from "../index.js";
-import { Constructor } from "../../../shared/types.js";
-import { getMetaInfo } from "../../../shared/metaInfo.js";
+import { SyncableMap } from "./syncableMap.js";
 import { SyncMapMetaInfo } from "./metaInfo.js";
-import { SerializedValue } from "../../serializedTypes.js";
+import { SyncableObservableMap } from "./syncableObservableMap.js";
+import { ObjectInfo } from "../../objectInfo.js";
 
 type TInstance = Map<any, any>;
 type TCreatePayload = {
@@ -38,6 +35,7 @@ type ChangeEntry =
 
 const TYPE_ID_NATIVEMAP = "<nativeMap>";
 const TYPE_ID_SYNCABLEMAP = "<syncableMap>";
+const TYPE_ID_SYNCABLEOBSERVABLEMAP = "<syncableObservableMap>";
 
 export interface IMapDispatcher<TKey = any, TValue = any> {
   reportClear(): void;
@@ -57,7 +55,7 @@ abstract class SyncableMapSerializerBase extends ExtendedTypeSerializer<TInstanc
     super(objectInfo);
   }
 
-  getTypeId(clientToken: ClientToken) {
+  override getTypeId(clientToken: ClientToken): string | null {
     return this._typeId;
   }
 
@@ -120,38 +118,18 @@ abstract class SyncableMapSerializerBase extends ExtendedTypeSerializer<TInstanc
   }
 
   generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
-    if (!isNewClient && !this.hasPendingChanges) return [];
-
-    if (isNewClient) {
-      const message: CreateObjectMessage<TCreatePayload> = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: this.getTypeId(clientToken)!,
-        data: this.getCreationData(clientToken),
-      };
-      return [message];
-    } else {
-      const message: ChangeObjectMessage<TChangePayload> = {
-        type: "change",
-        objectId: this.objectId,
-        data: this.getChangeData(clientToken),
-      };
-      return [message];
-    }
+    if (isNewClient) return [this.createMessage("create", this.getCreationData(clientToken), clientToken)];
+    else if (this.hasPendingChanges) return [this.createMessage("change", this.getChangeData(clientToken))];
     return [];
   }
 
   private getChangeData(clientToken: ClientToken): TChangePayload {
     return this._changes.map((change) => {
       if ("clear" in change) {
-        this.clearStoredReferencesWithClientToken(clientToken);
+        this.clearStoredReferences(clientToken);
         return { clear: true };
       } else if ("delete" in change) {
-        this.storeReference({
-          value: undefined,
-          key: change.key,
-          clientToken,
-        });
+        this.clearStoredReferences(change.key, clientToken);
         const serializedKey = this.serializeValue(change.key, clientToken);
         return { key: serializedKey, delete: true };
       } else {
@@ -160,15 +138,18 @@ abstract class SyncableMapSerializerBase extends ExtendedTypeSerializer<TInstanc
           key: change.key,
           values: [change.key, change.value],
         });
-        const serializedKey = this.serializeValue(change.key, clientToken);
-        const serializedValue = this.serializeValue(change.value, clientToken);
-        return { key: serializedKey, value: serializedValue };
+        const [key, value] = this.serializeValue({
+          clientToken,
+          key: change.key,
+          values: [change.key, change.value],
+        });
+        return { key, value };
       }
     });
   }
 
   private getCreationData(clientToken: ClientToken) {
-    this.clearStoredReferencesWithClientToken(clientToken);
+    this.clearStoredReferences(clientToken);
 
     const data: TCreatePayload = [];
     for (const [key, value] of this.instance) {
@@ -210,5 +191,6 @@ abstract class SyncableMapSerializerBase extends ExtendedTypeSerializer<TInstanc
   }
 }
 
-export const MapSerializer = createSerializerClass(SyncableMapSerializerBase, Map, TYPE_ID_NATIVEMAP, true);
+export const SyncableObservableMapSerializer = createSerializerClass(SyncableMapSerializerBase, SyncableObservableMap, TYPE_ID_SYNCABLEOBSERVABLEMAP, false);
 export const SyncableMapSerializer = createSerializerClass(SyncableMapSerializerBase, SyncableMap, TYPE_ID_SYNCABLEMAP, false);
+export const MapSerializer = createSerializerClass(SyncableMapSerializerBase, Map, TYPE_ID_NATIVEMAP, true);

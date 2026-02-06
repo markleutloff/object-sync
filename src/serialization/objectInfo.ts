@@ -1,12 +1,6 @@
-import { ClientTokenFilter, isForClientToken } from "../objectSync/clientFilter.js";
-import { TypeSerializer } from "../serialization/serializer.js";
-import { ObjectSync } from "../objectSync/objectSync.js";
-import { ClientToken } from "../shared/clientToken.js";
-import { toIterable } from "./types.js";
-
-export type StoredReference = {
-  dispose(): void;
-};
+import { createDisposable, IDisposable, ClientToken, toIterable, ClientTokenFilter, isForClientToken } from "../shared/index.js";
+import { TypeSerializer } from "./typeSerializer.js";
+import type { ObjectSync } from "../objectSync/objectSync.js";
 
 export class ObjectInfo<TInstance extends object = object> {
   private _serializer: TypeSerializer = null!;
@@ -72,17 +66,12 @@ export class ObjectInfo<TInstance extends object = object> {
     return this._owner;
   }
 
-  addReference(clientToken?: ClientToken): StoredReference {
+  addReference(clientToken?: ClientToken): IDisposable {
     this._referenceCountByClient.set(clientToken, (this._referenceCountByClient.get(clientToken) ?? 0) + 1);
 
-    let isDisposed = false;
-    return {
-      dispose: () => {
-        if (isDisposed) return;
-        isDisposed = true;
-        this.removeReference(clientToken);
-      },
-    };
+    return createDisposable(() => {
+      this.removeReference(clientToken);
+    });
   }
 
   get isOrphaned(): boolean {

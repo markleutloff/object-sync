@@ -1,13 +1,26 @@
-import { ExtendedTypeSerializer } from "../../serializer.js";
-import { ChangeObjectMessage, CreateObjectMessage, ExecuteFinishedObjectMessage, ExecuteObjectMessage, Message, MethodExecuteResult } from "../../../shared/messages.js";
-import { ObjectInfo, StoredReference } from "../../../shared/objectInfo.js";
-import { Constructor, forEachIterable, isIterable, isPrimitiveValue, isPromiseLike, OneOrMany } from "../../../shared/types.js";
-import { ClientToken } from "../../../shared/clientToken.js";
-import { ensureObjectSyncMetaInfo, nothing } from "../../../decorators/base.js";
-import { beforeExecuteOnClient, getSyncMethodInfo } from "../../../decorators/syncMethod.js";
-import { beforeSendObjectToClient, getTrackableTypeInfo, TrackableConstructorInfo } from "../../../decorators/syncObject.js";
-import { beforeSendPropertyToClient, checkCanApplyProperty, TrackedPropertyInfo, TrackedPropertySettingsBase } from "../../../decorators/syncProperty.js";
-import { SerializedValue } from "../../serializedTypes.js";
+import {
+  Constructor,
+  forEachIterable,
+  isIterable,
+  isPromiseLike,
+  OneOrMany,
+  ChangeObjectMessage,
+  CreateObjectMessage,
+  ExecuteFinishedObjectMessage,
+  ExecuteObjectMessage,
+  Message,
+  MethodExecuteResult,
+  ClientToken,
+  getMetaInfo,
+  SerializedValue,
+} from "../../../shared/index.js";
+import { ExtendedTypeSerializer } from "../../extendedTypeSerializer.js";
+import { beforeExecuteOnClient, getSyncMethodInfo } from "./decorators/syncMethod.js";
+import { beforeSendObjectToClient, getTrackableTypeInfo, TrackableConstructorInfo } from "./decorators/syncObject.js";
+import { beforeSendPropertyToClient, checkCanApplyProperty, TrackedPropertyInfo, TrackedPropertySettingsBase } from "./decorators/syncProperty.js";
+import { ObjectSyncMetaInfo } from "./metaInfo.js";
+import { nothing } from "./types.js";
+import { ObjectInfo } from "../../objectInfo.js";
 
 type PropertyValueInfo = {
   value: any;
@@ -81,40 +94,25 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
   private _typeInfo: TrackableConstructorInfo<TInstance> = null!;
 
   private readonly _properties: Map<keyof TInstance & string, PropertyValueInfo> = new Map();
-  private readonly _temporaryReferencesByClient: Map<ClientToken, StoredReference[]> = new Map();
   private readonly _pendingInvokeMethodInfosById: Map<unknown, InvokeMethodInfo> = new Map();
   private _methodInvokeResultsByClient: Map<ClientToken, MethodExecuteResult[]> = new Map();
   private _nextInvokeId = 1;
   private _dispatcher: ISyncObjectDispatcher | undefined;
 
-  constructor(objectInfo: ObjectInfo<TInstance>) {
+  constructor(
+    objectInfo: ObjectInfo<TInstance>,
+    private readonly _typeId: string,
+  ) {
     super(objectInfo);
 
     this.registerMessageHandler<ExecuteObjectMessage<TInstance, string & keyof TInstance>>("execute", (message, clientToken) => this.onExecuteMessageReceived(message, clientToken));
     this.registerMessageHandler<ExecuteFinishedObjectMessage>("executeFinished", (message, clientToken) => this.onExecuteFinishedMessageReceived(message, clientToken));
   }
 
-  private createTemporaryReference(value: any, clientToken: ClientToken) {
-    if (isPrimitiveValue(value)) {
-      return {
-        dispose() {},
-      };
-    }
-
-    const storedReference = this._objectInfo.owner.trackInternal(value)!.addReference(clientToken);
-    let tempRefs = this._temporaryReferencesByClient.get(clientToken);
-    if (!tempRefs) {
-      tempRefs = [];
-      this._temporaryReferencesByClient.set(clientToken, tempRefs);
-    }
-    tempRefs.push(storedReference);
-    return storedReference;
-  }
-
   override onInstanceSet(createdByCreateObjectMessage: boolean) {
     super.onInstanceSet(createdByCreateObjectMessage);
 
-    const metaInfo = ensureObjectSyncMetaInfo(this.instance);
+    const metaInfo = getMetaInfo(this.instance, ObjectSyncMetaInfo, true);
     metaInfo?.on("propertyChanged", (propertyInfo, instance, propertyKey, value) => {
       this.reportPropertyChanged(propertyInfo, propertyKey as keyof TInstance & string, value);
     });
@@ -128,7 +126,6 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
   }
 
   abstract get type(): Constructor;
-  abstract get typeId(): string;
 
   async onCreateMessageReceived(message: CreateObjectMessage<TPayload>, clientToken: ClientToken) {
     const constructorArguments = (message.data["[[constructor]]"] ?? []).map((arg: any) => {
@@ -170,8 +167,8 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
         this._methodInvokeResultsByClient.set(clientToken, methodInvokeResults);
       }
 
-      if (error) methodInvokeResults.push({ objectId: message.objectId, invokeId: message.id, error });
-      else methodInvokeResults.push({ objectId: message.objectId, invokeId: message.id, result });
+      if (error) methodInvokeResults.push({ objectId: message.objectId, invokeId: message.invokeId, error });
+      else methodInvokeResults.push({ objectId: message.objectId, invokeId: message.invokeId, result });
 
       this.reportPendingMessages();
     };
@@ -244,15 +241,14 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
           propertiesToOmit.add(propertyKey);
           const propertyValueInfo = this._properties.get(propertyKey as keyof TInstance & string);
           if (!propertyValueInfo) {
-            throw new Error(`Cannot use property '${propertyKey}' as constructor argument for type '${this.typeId}' because it is not a tracked property.`);
+            throw new Error(`Cannot use property '${propertyKey}' as constructor argument for type '${this._typeId}' because it is not a tracked property.`);
           }
 
           const value = propertyValueInfo.value;
           const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
           if (beforeSendResult.skip) return;
 
-          this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
-          finalConstructorArguments.push(this.serializeValue(beforeSendResult.value, clientToken));
+          finalConstructorArguments.push(this.serializeValue({ value: beforeSendResult.value, key: propertyKey, clientToken }));
         });
       } else {
         if (constructorArgumentsResult.propertiesToOmit) {
@@ -274,18 +270,10 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
       const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
       if (beforeSendResult.skip) return;
 
-      this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
-      data[propertyKey as string] = this.serializeValue(beforeSendResult.value, clientToken);
+      data[propertyKey as string] = this.serializeValue({ value: beforeSendResult.value, key: propertyKey, clientToken });
     });
 
-    const createMessage: CreateObjectMessage = {
-      type: "create",
-      objectId: this.objectId,
-      typeId,
-      data,
-    };
-
-    return createMessage;
+    return this.createMessage("create", data, typeId);
   }
 
   private generateChangeMessage(clientToken: ClientToken): ChangeObjectMessage<TPayload> | null {
@@ -298,22 +286,14 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
       const beforeSendResult = beforeSendPropertyToClient(this.instance.constructor as Constructor, this.instance, propertyKey, value, clientToken);
       if (beforeSendResult.skip) return;
 
-      this.storeReference({ value: beforeSendResult.value, key: propertyKey, clientToken });
-
-      const transformedValue = this.serializeValue(beforeSendResult.value, clientToken);
+      const transformedValue = this.serializeValue({ value: beforeSendResult.value, key: propertyKey, clientToken });
       data[propertyKey as string] = transformedValue;
       hasDataToSend = true;
     });
 
     if (!hasDataToSend) return null;
 
-    const changeMessage: ChangeObjectMessage = {
-      type: "change",
-      objectId: this.objectId,
-      data,
-    };
-
-    return changeMessage;
+    return this.createMessage("change", data);
   }
 
   generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
@@ -344,21 +324,12 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
     if (methodInvokeResults) {
       this._methodInvokeResultsByClient.delete(clientToken);
       for (const methodInvokeResult of methodInvokeResults ?? []) {
-        const executeFinishedMessage: ExecuteFinishedObjectMessage = {
-          type: "executeFinished",
-          objectId: methodInvokeResult.objectId,
+        const executeFinishedMessage = this.createMessage<ExecuteFinishedObjectMessage>("executeFinished", {
           invokeId: methodInvokeResult.invokeId,
-        };
+        });
 
-        if ("result" in methodInvokeResult) {
-          this.createTemporaryReference(methodInvokeResult.result, clientToken);
-          executeFinishedMessage.result = this.serializeValue(methodInvokeResult.result, clientToken);
-        }
-
-        if ("error" in methodInvokeResult) {
-          this.createTemporaryReference(methodInvokeResult.error, clientToken);
-          executeFinishedMessage.error = this.serializeValue(methodInvokeResult.error, clientToken);
-        }
+        if ("result" in methodInvokeResult) executeFinishedMessage.result = this.serializeValue(methodInvokeResult.result, clientToken);
+        if ("error" in methodInvokeResult) executeFinishedMessage.error = this.serializeValue(methodInvokeResult.error, clientToken);
 
         result.push(executeFinishedMessage);
       }
@@ -378,24 +349,21 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
       }
 
       const parameters = args.map((arg) => {
-        this.createTemporaryReference(arg, clientToken);
         const transformedValue = this.serializeValue(arg, clientToken);
         return transformedValue;
       });
 
-      const executeMessage: ExecuteObjectMessage = {
-        id: pendingInvokeMethodInfos.id,
-        type: "execute",
-        objectId: this.objectId,
+      const executeMessage = this.createMessage<ExecuteObjectMessage>("execute", {
+        invokeId: pendingInvokeMethodInfos.id,
         method: pendingInvokeMethodInfos.methodName,
         parameters,
-      };
+      });
       result.push(executeMessage);
     }
   }
 
   getTypeId(clientToken: ClientToken) {
-    const typeIdOrNothing = beforeSendObjectToClient(this.type, this.instance, this.typeId, clientToken);
+    const typeIdOrNothing = beforeSendObjectToClient(this.type, this.instance, this._typeId, clientToken);
     if (typeIdOrNothing === nothing) return null;
 
     return typeIdOrNothing;
@@ -417,7 +385,7 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
     }
     if (current.value === value) return;
 
-    this.clearStoredReferencesWithKey(key);
+    this.clearStoredReferences(key);
 
     current.value = value;
     if (current.isBeeingApplied) return;
@@ -431,13 +399,6 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
 
     if (clientToken) {
       this._methodInvokeResultsByClient.delete(clientToken);
-      const tempRefs = this._temporaryReferencesByClient.get(clientToken);
-      if (tempRefs) {
-        for (const storedReference of tempRefs) {
-          storedReference.dispose();
-        }
-        this._temporaryReferencesByClient.delete(clientToken);
-      }
     } else {
       this._properties.forEach((property) => {
         property.hasPendingChanges = false;
@@ -501,40 +462,41 @@ export abstract class SyncObjectSerializer<TInstance extends object> extends Ext
     }
 
     const id = this._nextInvokeId++;
-    const promiseDataByClient: Map<ClientToken, InvokeMethodClientInfo> = new Map();
 
     const invokeMethodInfo: InvokeMethodInfo = {
       id,
-      methodName: methodName as string,
+      methodName,
       parameters,
-      invokeMethodInfoByClient: promiseDataByClient,
+      invokeMethodInfoByClient: new Map(),
     };
 
     forEachIterable(clients, (clientToken) => {
-      let resolve: (value: any) => void;
-      let reject: (reason: any) => void;
-      const promise = new Promise<MethodReturnType<TInstance, TMethodName>>((res, rej) => {
-        resolve = (data) => {
-          res(this.deserializeValue(data, clientToken) as MethodReturnType<TInstance, TMethodName>);
-        };
-        reject = (data) => {
-          rej(this.deserializeValue(data, clientToken));
-        };
-      });
-
-      promise.finally(() => {
+      const onPromiseFinished = () => {
         invokeMethodInfo.invokeMethodInfoByClient.delete(clientToken);
         if (invokeMethodInfo.invokeMethodInfoByClient.size === 0) {
           this._pendingInvokeMethodInfosById.delete(id);
         }
+      };
+
+      const promise = new Promise<MethodReturnType<TInstance, TMethodName>>((res, rej) => {
+        invokeMethodInfo.invokeMethodInfoByClient.set(clientToken, {
+          resolve: (data) => {
+            onPromiseFinished();
+
+            const result = this.deserializeValue(data, clientToken) as MethodReturnType<TInstance, TMethodName>;
+            res(result);
+          },
+          reject: (data) => {
+            onPromiseFinished();
+
+            const error = this.deserializeValue(data, clientToken);
+            rej(error);
+          },
+          sentToClient: false,
+        });
       });
 
       resultByClient.set(clientToken, promise);
-      promiseDataByClient.set(clientToken, {
-        resolve: resolve!,
-        reject: reject!,
-        sentToClient: false,
-      });
     });
 
     this._pendingInvokeMethodInfosById.set(invokeMethodInfo.id, invokeMethodInfo);

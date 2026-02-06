@@ -1,10 +1,36 @@
-import { ObjectSync, SyncableArray, ClientToken, syncObject, TypeSerializer, Message, ObjectSyncSettings } from "../../dist/index.js";
+import { ObjectSync, SyncableArray, ClientToken, syncObject, ObjectSyncSettings, ExtendedTypeSerializer, CreateObjectMessage, Message, syncSerializer } from "../../dist/index.js";
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
 
 @syncObject({ typeId: "Beta" })
 class Beta {}
+
+class CustomClass {
+  value: string;
+
+  constructor(value: string) {
+    this.value = value;
+  }
+}
+
+@syncSerializer({
+  typeId: "CustomClass",
+  type: CustomClass,
+})
+class CustomClassSerializer extends ExtendedTypeSerializer<CustomClass, string, string> {
+  onCreateMessageReceived(message: CreateObjectMessage<string>, clientToken: ClientToken): void {
+    this.instance = new CustomClass(message.data);
+  }
+  getTypeId(clientToken: ClientToken): string | null {
+    return "CustomClass";
+  }
+  generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[] {
+    if (isNewClient) return [this.createMessage("create", this.instance.value, clientToken)];
+
+    return [];
+  }
+}
 
 describe("ObjectSync client-host integration (SyncableArray)", () => {
   let alpha: SyncableArray<string>;
@@ -136,5 +162,28 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
 
     const betaClient = clientObjectSync.findOne(Beta)!;
     assert.notEqual(betaClient, null);
+  });
+
+  it("should serialize a custom class", async () => {
+    hostObjectSync = new ObjectSync({
+      identity: "host",
+      serializers: [CustomClass],
+    });
+    clientObjectSync = new ObjectSync({
+      identity: "client",
+      serializers: [CustomClass],
+    });
+
+    clientObjectSyncClientToken = hostObjectSync.registerClient({ identity: "client" });
+    hostObjectSyncClientToken = clientObjectSync.registerClient({ identity: "host" });
+
+    const custom = new CustomClass("customValue");
+    hostObjectSync.track(custom);
+
+    const messages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
+    await clientObjectSync.applyMessagesAsync(messages, hostObjectSyncClientToken);
+
+    const customClient = clientObjectSync.findOne(CustomClass)!;
+    assert.notEqual(customClient, null);
   });
 });

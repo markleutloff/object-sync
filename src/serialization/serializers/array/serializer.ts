@@ -1,14 +1,11 @@
-import { ChangeObjectMessage, CreateObjectMessage, Message } from "../../../shared/messages.js";
-import { ExtendedTypeSerializer } from "../../serializer.js";
+import { SerializedValue, Constructor, getMetaInfo, ClientToken, ChangeObjectMessage, CreateObjectMessage, Message } from "../../../shared/index.js";
+import { ExtendedTypeSerializer } from "../../extendedTypeSerializer.js";
 import { createSerializerClass } from "../base.js";
-import { ClientToken } from "../../../shared/clientToken.js";
 import { SyncArrayMetaInfo } from "./metaInfo.js";
-import { getMetaInfo } from "../../../shared/metaInfo.js";
 import { SyncableArray } from "./syncableArray.js";
 import { SyncableObservableArray } from "./syncableObservableArray.js";
 import { SpliceInstruction, applyChangeSet, createChangeSet } from "./changeSet.js";
-import { ObjectInfo, SerializedValue } from "../../../index.js";
-import { Constructor } from "../../../shared/types.js";
+import { ObjectInfo } from "../../objectInfo.js";
 
 type TInstance = Array<any>;
 type TCreatePayload = SerializedValue[];
@@ -19,7 +16,7 @@ const TYPE_ID_NATIVEARRAY = "<nativeArray>";
 const TYPE_ID_SYNCARRAY = "<syncArray>";
 const TYPE_ID_OBSERVABLEARRAY = "<syncObservableArray>";
 
-export interface ISyncArrayDispatcher<TElement = any> {
+export interface IArrayDispatcher<TElement = any> {
   /**
    * Reports a splice operation on the array. Can be used to manually notify about changes (for plain Arrays).
    * Will throw an error if arrayChangeSetMode is not set to "compareStates".
@@ -45,7 +42,7 @@ export interface ISyncArrayDispatcher<TElement = any> {
 abstract class SyncableArraySerializerBase extends ExtendedTypeSerializer<TInstance, TCreatePayload, TChangePayload> {
   private _oldArrayContent: any[] = [];
   private _temporaryChanges: ChangeEntry[] | null = null;
-  private _dispatcher: ISyncArrayDispatcher | undefined;
+  private _dispatcher: IArrayDispatcher | undefined;
   private _changeSetMode?: "trackSplices" | "compareStates";
 
   constructor(
@@ -56,7 +53,7 @@ abstract class SyncableArraySerializerBase extends ExtendedTypeSerializer<TInsta
     super(objectInfo);
   }
 
-  getTypeId(clientToken: ClientToken) {
+  override getTypeId(clientToken: ClientToken): string | null {
     return this._typeId;
   }
 
@@ -116,44 +113,33 @@ abstract class SyncableArraySerializerBase extends ExtendedTypeSerializer<TInsta
       }
     }
     if (isNewClient) {
-      this.clearStoredReferencesWithClientToken(clientToken);
+      this.clearStoredReferences(clientToken);
 
-      const data = this.instance.map((element, index) => {
-        this.storeReference({ value: element, key: index, clientToken });
-        return this.serializeValue(element, clientToken);
-      });
-
-      const createMessage: CreateObjectMessage<TCreatePayload> = {
-        type: "create",
-        objectId: this.objectId,
-        typeId: this.getTypeId(clientToken)!,
-        data,
-      };
-      messages.push(createMessage);
-    } else if (this.hasPendingChanges) {
-      this._temporaryChanges?.forEach((change) => {
-        for (let i = 0; i < change.deleteCount; i++) {
-          this.storeReference({ value: undefined, key: change.start + i, clientToken });
-        }
-        change.items.forEach((item, itemIndex) => {
-          this.storeReference({ value: item, key: change.start + itemIndex, clientToken });
-        });
-      });
-      const data: SpliceInstruction<any>[] = this._temporaryChanges!.map((change) => ({
-        start: change.start,
-        deleteCount: change.deleteCount,
-        items: change.items.map((item) => {
-          const mappedValue = this.serializeValue(item, clientToken);
-          return mappedValue;
+      const data = this.instance.map((element, index) =>
+        this.serializeValue({
+          clientToken,
+          value: element,
+          key: index,
         }),
-      }));
+      );
 
-      const changeMessage: ChangeObjectMessage<SpliceInstruction<any>[]> = {
-        type: "change",
-        objectId: this.objectId,
-        data,
-      };
-      messages.push(changeMessage);
+      messages.push(this.createMessage("create", data, clientToken));
+    } else if (this.hasPendingChanges) {
+      const data: SpliceInstruction<any>[] = this._temporaryChanges!.map((change) => {
+        // only clear stored references for deleted items,
+        // for inserted items the references will be stored when serializing the new values so we skip those
+        for (let i = change.items.length; i < change.deleteCount; i++) {
+          this.clearStoredReferences(change.start + i, clientToken);
+        }
+
+        return {
+          start: change.start,
+          deleteCount: change.deleteCount,
+          items: change.items.map((item, itemIndex) => this.serializeValue({ value: item, key: change.start + itemIndex, clientToken })),
+        };
+      });
+
+      messages.push(this.createMessage("change", data));
     }
     return messages;
   }
@@ -166,7 +152,7 @@ abstract class SyncableArraySerializerBase extends ExtendedTypeSerializer<TInsta
     }
   }
 
-  override get dispatcher(): ISyncArrayDispatcher {
+  override get dispatcher(): IArrayDispatcher {
     return (this._dispatcher ??= this.createDispatcher());
   }
 
@@ -188,10 +174,10 @@ abstract class SyncableArraySerializerBase extends ExtendedTypeSerializer<TInsta
         self.changeSetMode = value;
       },
     };
-    return result as unknown as ISyncArrayDispatcher;
+    return result as unknown as IArrayDispatcher;
   }
 }
 
-export const ArraySerializer = createSerializerClass(SyncableArraySerializerBase, Array, TYPE_ID_NATIVEARRAY, true);
-export const SyncableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableArray, TYPE_ID_SYNCARRAY, false);
 export const SyncableObservableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableObservableArray, TYPE_ID_OBSERVABLEARRAY, false);
+export const SyncableArraySerializer = createSerializerClass(SyncableArraySerializerBase, SyncableArray, TYPE_ID_SYNCARRAY, false);
+export const ArraySerializer = createSerializerClass(SyncableArraySerializerBase, Array, TYPE_ID_NATIVEARRAY, true);

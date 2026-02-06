@@ -1,6 +1,5 @@
-import { ClientToken } from "./index.js";
-import { ObjectInfo } from "./objectInfo.js";
-import { Constructor } from "./types.js";
+import { ObjectInfo } from "../serialization/index.js";
+import { Constructor, ClientToken } from "../shared/index.js";
 
 export class ObjectPool {
   private readonly _objectToInfo: Map<object, ObjectInfo> = new Map();
@@ -18,8 +17,8 @@ export class ObjectPool {
     return this._objectToInfo.get(instance);
   }
 
-  getObjectById(objectId: unknown): object | undefined {
-    return this._objectIdToInfo.get(objectId)?.instance;
+  getObjectById<T extends object = object>(objectId: unknown): T | undefined {
+    return this._objectIdToInfo.get(objectId)?.instance as T | undefined;
   }
 
   getInfoById(objectId: unknown): ObjectInfo | undefined {

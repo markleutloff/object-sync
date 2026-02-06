@@ -1,4 +1,4 @@
-import { getMetaInfo } from "../../../shared/metaInfo.js";
+import { getMetaInfo } from "../../../shared/index.js";
 import { SyncMapMetaInfo } from "./metaInfo.js";
 
 export class SyncableMap<K = any, V = any> extends Map<K, V> {

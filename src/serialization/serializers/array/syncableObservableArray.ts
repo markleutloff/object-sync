@@ -1,4 +1,4 @@
-import { EventEmitter, IEventEmitter } from "../../../shared/eventEmitter.js";
+import { EventEmitter, IEventEmitter } from "../../../shared/index.js";
 import { SpliceInstructionEx } from "./changeSet.js";
 import { SyncableArray } from "./syncableArray.js";
 

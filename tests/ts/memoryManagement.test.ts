@@ -68,6 +68,29 @@ describe("MemoryManagement", () => {
     });
   };
 
+  it("should not send delete messages when object is root tracked", async () => {
+    createSourceSync("byClient");
+    const client0 = createClientSync();
+
+    const alpha = new Alpha();
+    let beta: Beta | null = new Beta();
+    alpha.beta = beta;
+    sourceSync.track(alpha, "alpha");
+    sourceSync.track(beta);
+
+    let messages = (await sendDataToClients()).get(client0)!;
+
+    alpha.beta = null;
+    messages = (await sendDataToClients()).get(client0)!;
+    let deleteMessages = messages.filter((m) => m.type === "delete");
+    assert(deleteMessages.length === 0, "Delete messages should not be sent to dest");
+
+    sourceSync.untrack(beta);
+    messages = (await sendDataToClients()).get(client0)!;
+    deleteMessages = messages.filter((m) => m.type === "delete");
+    assert(deleteMessages.length === 1, "Delete messages should be sent to dest");
+  });
+
   it("should send delete messages when object is unused but not yet garbage collected", async () => {
     createSourceSync("byClient");
     const client0 = createClientSync();

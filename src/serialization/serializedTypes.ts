@@ -1,17 +1,5 @@
-import { ObjectInfo } from "../shared/objectInfo.js";
-import { ClientToken } from "../shared/clientToken.js";
-import { TypeSerializer } from "./serializer.js";
-
-export type PrimitiveValue = {
-  value: string | number | boolean | null | undefined;
-};
-
-export type ObjectReference = {
-  objectId: string;
-  typeId: string;
-};
-
-export type SerializedValue = PrimitiveValue | ObjectReference | undefined;
+import { TypeSerializer } from "./typeSerializer.js";
+import { ObjectInfo } from "./objectInfo.js";
 
 export const getSerializerSymbol = Symbol("getSerializer");
 
