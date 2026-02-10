@@ -1,4 +1,4 @@
-import { ObjectInfo } from "../serialization/index.js";
+import { ObjectInfo } from "../syncAgents/index.js";
 import { Constructor, ClientToken } from "../shared/index.js";
 
 export class ObjectPool {
@@ -72,16 +72,16 @@ export class ObjectPool {
     this._objectToInfo.set(info.instance, info);
   }
 
-  findOne<T extends object>(constructor: Constructor<T>, objectId?: unknown) {
+  findOne<T extends object>(constructor: Constructor<T>, objectId?: unknown, predicate?: (info: ObjectInfo) => boolean): T | undefined {
     return this.infos.find((info) => {
-      return info.instance && info.instance instanceof constructor && (objectId === undefined || info.objectId === objectId);
+      return info.instance && info.instance instanceof constructor && (objectId === undefined || info.objectId === objectId) && (predicate ? predicate(info) : true);
     })?.instance as T | undefined;
   }
 
-  findAll<T extends object>(constructor: Constructor<T>) {
+  findAll<T extends object>(constructor?: Constructor<T>, predicate?: (info: ObjectInfo) => boolean): T[] {
     return this.infos
       .filter((info) => {
-        return info.instance && info.instance instanceof constructor;
+        return (!constructor || (info.instance && info.instance instanceof constructor)) && (predicate ? predicate(info) : true);
       })
       .map((info) => info.instance as T);
   }

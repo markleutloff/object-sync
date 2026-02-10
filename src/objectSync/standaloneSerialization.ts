@@ -1,9 +1,8 @@
-import { TypeSerializerConstructor } from "../serialization/index.js";
-import { Message, Constructor } from "../shared/index.js";
+import { Message } from "../shared/index.js";
 import { ObjectSync } from "./objectSync.js";
-import { ObjectIdGeneratorSettings } from "./types.js";
+import { ObjectSyncSettings } from "./types.js";
 
-export type StandaloneSerializationSettings = {
+export type StandaloneSerializationSettings = Pick<ObjectSyncSettings, "objectIdGeneratorSettings" | "intrinsics" | "types"> & {
   /**
    * Identity of the internal ObjectSync instance, defaults to "host".
    */
@@ -13,27 +12,6 @@ export type StandaloneSerializationSettings = {
    * Identity of the internal client ObjectSync instance, defaults to "client".
    */
   clientIdentity?: string;
-
-  /**
-   * Type serializers to use for serializing and deserializing property values during synchronization.
-   * Can either be provided as an array of type serializers or constructors of SyncObject types.
-   * When constructors are provided, the corresponding internal TypeSerializer will be used.
-   * When not provided, all registered types and serializers will be used.
-   */
-  serializers?: (TypeSerializerConstructor | Constructor)[];
-
-  /**
-   * Intrinsic type serializers to use for serializing and deserializing base types (Array, Map, Set, Object) during synchronization.
-   * Can be provided as an array of type serializers.
-   * When not provided, default intrinsic type serializers will be used.
-   */
-  intrinsicSerializers?: TypeSerializerConstructor[];
-
-  /**
-   * Settings for generating object IDs.
-   * When not provided, a default generator with the identity as prefix will be used (eg: "host-1").
-   */
-  objectIdGeneratorSettings?: ObjectIdGeneratorSettings;
 };
 
 /**
@@ -66,11 +44,14 @@ export function deserializeValue<TValue = any>(data: string, settings?: Standalo
   const hostSync = new ObjectSync({ ...settings, identity: settings?.clientIdentity ?? "client" });
   const clientToken = hostSync.registerClient({ identity: settings?.identity ?? "host" });
   const messages = JSON.parse(data) as Message[];
-  hostSync.applyMessagesAsync(messages, clientToken);
+  const promises = hostSync.applyMessages(messages, clientToken);
+  if (promises.length > 0) {
+    throw new Error("Deserialization cannot be completed synchronously because there are pending promises.");
+  }
 
-  const root = hostSync.findOne("root");
+  const root = hostSync.rootObjects.findOne("root");
   if (root) return root as TValue;
-  const primitive = hostSync.findOne("value");
+  const primitive = hostSync.rootObjects.findOne("value");
   if (primitive) return (primitive as any).value as TValue;
   throw new Error("Deserialized data does not contain a root or primitive value");
 }

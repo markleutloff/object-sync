@@ -1,5 +1,5 @@
-import { TypeSerializerConstructor } from "../serialization/index.js";
 import { ClientToken, Constructor, Message } from "../shared/index.js";
+import { SyncAgentProvider } from "../syncAgents/index.js";
 
 export type MemoryManagementMode = "weak" | "byClient";
 export type ArrayChangeSetMode = "trackSplices" | "compareStates";
@@ -64,8 +64,6 @@ export type ObjectIdGeneratorSettings =
 
 export type FinalizedObjectSyncSettings = {
   identity: string;
-  serializers: TypeSerializerConstructor[];
-  intrinsicSerializers: TypeSerializerConstructor[];
   objectIdGeneratorSettings: ObjectIdGeneratorSettings;
   arrayChangeSetMode: ArrayChangeSetMode;
   memoryManagementMode: MemoryManagementMode;
@@ -78,19 +76,19 @@ export type ObjectSyncSettings = {
   identity: string;
 
   /**
-   * Type serializers to use for serializing and deserializing property values during synchronization.
-   * Can either be provided as an array of type serializers or constructors of SyncObject types.
-   * When constructors are provided, the corresponding internal TypeSerializer will be used.
-   * When not provided, all registered types and serializers will be used.
+   * Type sync agents to use for serializing and deserializing property values during synchronization.
+   * Can either be provided as an array of type sync agents or constructors of SyncObject types.
+   * When constructors are provided, the corresponding internal TypeSyncAgent will be used.
+   * When not provided, all registered types and sync agents will be used.
    */
-  serializers?: (TypeSerializerConstructor | Constructor)[];
+  types?: (SyncAgentProvider | Constructor)[];
 
   /**
-   * Intrinsic type serializers to use for serializing and deserializing base types (Array, Map, Set, Object) during synchronization.
-   * Can be provided as an array of type serializers.
-   * When not provided, default intrinsic type serializers will be used.
+   * Intrinsic type sync agents to use for serializing and deserializing base types (Array, Map, Set, Object) during synchronization.
+   * Can be provided as an array of type sync agents.
+   * When not provided, default intrinsic type sync agents will be used.
    */
-  intrinsicSerializers?: TypeSerializerConstructor[];
+  intrinsics?: (SyncAgentProvider | Constructor)[];
 
   /**
    * Settings for generating object IDs.
@@ -111,4 +109,9 @@ export type ObjectSyncSettings = {
    * "byClient" (default): Delete messages will be sent when objects are no longer used by a connected client.
    */
   memoryManagementMode?: MemoryManagementMode;
+
+  /**
+   * Optional list of types which the sender may send to this ObjectSync instance as root objects. This is a security measure to prevent clients from sending unexpected types which may be used to cause issues on the receiving end (e.g., by sending very large objects or objects with getters that execute expensive code). If not set, all types provided by sync agents will be allowed as root types.
+   */
+  allowedRootTypesFromClient?: Constructor[];
 };

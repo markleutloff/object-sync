@@ -37,7 +37,7 @@ describe("ObjectSync with worker threads", () => {
 
   it("should report invoke results from clients", async () => {
     const prefixToSend = "response from client: ";
-    const clientResults = hostObjectSync.getDispatcher(hostRoot)!.invoke("invoke", prefixToSend);
+    const clientResults = hostObjectSync.getSyncAgent(hostRoot)!.invoke("invoke", prefixToSend);
 
     await exchangeMessagesAsync(hostObjectSync, workers);
 

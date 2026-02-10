@@ -81,7 +81,7 @@ describe("Basics", () => {
     messages = sourceSync.getMessages().get(sourceSyncDestClientToken)!;
     assert.strictEqual(messages.length, 0, "Expected no new messages to be generated");
 
-    assert.strictEqual(sourceSync.allTrackedObjects.length, 1, "Expected exactly 1 tracked object after deletion");
+    assert.strictEqual(sourceSync.allObjects.all.length, 1, "Expected exactly 1 tracked object after deletion");
   });
 
   it("should report untracked", async () => {
@@ -95,7 +95,7 @@ describe("Basics", () => {
 
     assert.strictEqual(messages.length, 2, "Expected exactly 2 messages to be generated after deletion");
     assert.strictEqual(messages.filter((m) => m.type === "delete").length, 2, "Expected exactly 2 delete messages to be generated after deletion");
-    assert.strictEqual(sourceSync.allTrackedObjects.length, 0, "Expected no tracked objects after untracking");
+    assert.strictEqual(sourceSync.allObjects.all.length, 0, "Expected no tracked objects after untracking");
   });
 
   it("should allow clients to send back own values", async () => {
@@ -105,7 +105,7 @@ describe("Basics", () => {
 
     await sendDataToDest();
 
-    const alphaDest = destSync.findOne(Alpha)!;
+    const alphaDest = destSync.rootObjects.findOne(Alpha)!;
     alphaDest.beta = new Beta();
 
     await sendDataToSource();
@@ -123,7 +123,7 @@ describe("Basics", () => {
 
     await sendDataToDest();
 
-    const alphaDest = destSync.findOne(Alpha)!;
+    const alphaDest = destSync.rootObjects.findOne(Alpha)!;
     const betaDest = alphaDest.beta!;
 
     alphaSource.beta = null;

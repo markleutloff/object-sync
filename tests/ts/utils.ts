@@ -1,4 +1,4 @@
-import { getTrackableTypeInfo } from "../../src/serialization/serializers/syncObject/decorators/syncObject.js";
+import { getTrackableTypeInfo } from "../../src/syncAgents/agents/syncObject/decorators/syncObject.js";
 import assert from "assert";
 
 export function assertObjectsEqual(obj1: any, obj2: any) {

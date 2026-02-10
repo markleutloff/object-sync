@@ -1,5 +1,5 @@
 import { ClientToken, EventEmitter } from "../shared/index.js";
-import { ObjectInfo } from "../serialization/index.js";
+import { ObjectInfo } from "../syncAgents/index.js";
 
 type EventMap = {
   freed(objectId: string, clients: Set<ClientToken>): void;
@@ -25,7 +25,7 @@ export class WeakObjectPool extends EventEmitter<EventMap> {
     this._objectToInfoMap.set(info.instance, info);
     this._objectIdToWeakRefMap.set(info.objectId, new WeakRef(info));
     this._finalizationRegistry.register(info.instance, info.objectId);
-    this._objectIdClientTokens.set(info.objectId, info.serializer.clients);
+    this._objectIdClientTokens.set(info.objectId, info.syncAgent.clients);
   }
 
   delete(info: ObjectInfo) {

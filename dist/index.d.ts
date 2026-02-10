@@ -37,6 +37,7 @@ export type CreateObjectMessage<TPayload = any> = Message & {
 	type: typeof CreateMessageType;
 	typeId: string;
 	data: TPayload;
+	isRoot?: boolean;
 };
 export type ChangeObjectMessage<TPayload = any> = Message & {
 	type: typeof ChangeMessageType;
@@ -159,8 +160,6 @@ export type ObjectIdGeneratorSettings = {
 };
 export type FinalizedObjectSyncSettings = {
 	identity: string;
-	serializers: TypeSerializerConstructor[];
-	intrinsicSerializers: TypeSerializerConstructor[];
 	objectIdGeneratorSettings: ObjectIdGeneratorSettings;
 	arrayChangeSetMode: ArrayChangeSetMode;
 	memoryManagementMode: MemoryManagementMode;
@@ -171,18 +170,18 @@ export type ObjectSyncSettings = {
 	 */
 	identity: string;
 	/**
-	 * Type serializers to use for serializing and deserializing property values during synchronization.
-	 * Can either be provided as an array of type serializers or constructors of SyncObject types.
-	 * When constructors are provided, the corresponding internal TypeSerializer will be used.
-	 * When not provided, all registered types and serializers will be used.
+	 * Type sync agents to use for serializing and deserializing property values during synchronization.
+	 * Can either be provided as an array of type sync agents or constructors of SyncObject types.
+	 * When constructors are provided, the corresponding internal TypeSyncAgent will be used.
+	 * When not provided, all registered types and sync agents will be used.
 	 */
-	serializers?: (TypeSerializerConstructor | Constructor)[];
+	types?: (SyncAgentProvider | Constructor)[];
 	/**
-	 * Intrinsic type serializers to use for serializing and deserializing base types (Array, Map, Set, Object) during synchronization.
-	 * Can be provided as an array of type serializers.
-	 * When not provided, default intrinsic type serializers will be used.
+	 * Intrinsic type sync agents to use for serializing and deserializing base types (Array, Map, Set, Object) during synchronization.
+	 * Can be provided as an array of type sync agents.
+	 * When not provided, default intrinsic type sync agents will be used.
 	 */
-	intrinsicSerializers?: TypeSerializerConstructor[];
+	intrinsics?: (SyncAgentProvider | Constructor)[];
 	/**
 	 * Settings for generating object IDs.
 	 * When not provided, a default generator with the identity as prefix will be used (eg: "host-1").
@@ -200,160 +199,26 @@ export type ObjectSyncSettings = {
 	 * "byClient" (default): Delete messages will be sent when objects are no longer used by a connected client.
 	 */
 	memoryManagementMode?: MemoryManagementMode;
+	/**
+	 * Optional list of types which the sender may send to this ObjectSync instance as root objects. This is a security measure to prevent clients from sending unexpected types which may be used to cause issues on the receiving end (e.g., by sending very large objects or objects with getters that execute expensive code). If not set, all types provided by sync agents will be allowed as root types.
+	 */
+	allowedRootTypesFromClient?: Constructor[];
 };
-export type TrackedObjectDisposable<TInstance extends object> = IDisposable & {
-	readonly objectId: string;
-	readonly instance: TInstance | undefined;
-};
-type DispatcherType<TInstance> = TInstance extends Array<infer TItem> ? IArrayDispatcher<TItem> : TInstance extends Set<infer TItem> ? ISetDispatcher<TItem> : TInstance extends Map<infer TKey, infer TValue> ? IMapDispatcher<TKey, TValue> : TInstance extends object ? ISyncObjectDispatcher<TInstance> : never;
-type DispatcherOrFallback<TDispatcher, TInstance> = TDispatcher extends null ? DispatcherType<TInstance> : TDispatcher;
-export declare class ObjectSync {
-	private readonly _objectPool;
-	private readonly _weakObjectPool;
-	private readonly _objectsWithPendingMessages;
-	private readonly _clients;
-	private readonly _settings;
-	private readonly _pendingWeakDeletes;
-	private _nextObjectId;
-	private _pendingCreateMessageByObjectId;
-	private readonly _ownClientToken;
+declare class SyncAgentProviders {
+	private readonly commonAgentProviders;
+	private readonly intrinsicsAgentProviders;
 	constructor(settings: ObjectSyncSettings);
-	get arrayChangeSetMode(): ArrayChangeSetMode;
-	reportPendingMessagesForObject(objectInfo: ObjectInfo): void;
-	generateObjectId(value?: object): string;
-	/**
-	 * Registers a new client connection.
-	 * @param identity The identity of the client connection.
-	 * @returns The token to the newly registered client connection.
-	 */
-	registerClient(identity: string): ClientToken;
-	/**
-	 * Registers a new client connection.
-	 * @param settings Settings for the client connection.
-	 * @returns The token to the newly registered client connection.
-	 */
-	registerClient(settings: ClientConnectionSettings): ClientToken;
-	get registeredClientTokens(): ClientToken[];
-	/**
-	 * Removes all client-specific state for a client (e.g., when disconnecting).
-	 */
-	removeClient(clientToken: ClientToken): void;
-	/**
-	 * Gets the identity of this ObjectSync instance.
-	 */
-	get identity(): string;
-	/** Returns all currently tracked objects. */
-	get allTrackedObjects(): object[];
-	/**
-	 * Sets a client restriction filter for a tracked object.
-	 * @param obj The tracked object to set the filter for.
-	 * @param filter The client restriction filter to apply.
-	 */
-	setClientRestriction<T extends object>(obj: T, filter: ClientTokenFilter): void;
-	/**
-	 * Tracks an object for synchronization.
-	 * Must be called for root objects you want to track. Tracked root objects will never be automatically deleted.
-	 * @param instance The instance to track.
-	 * @param objectId Optional object ID to use for the tracked object. If not provided, a new object ID will be generated.
-	 * @return A disposable which can be used to untrack the object and access the tracked object's ID and instance (when still tracked).
-	 */
-	track<T extends object>(instance: T, objectId?: string): TrackedObjectDisposable<T>;
-	/**
-	 * Gets the object ID of a tracked object.
-	 * @param instance The tracked object instance.
-	 * @returns The object ID of the tracked object, or null if the object is not tracked.
-	 */
-	getObjectId(instance: object): string | null;
-	trackInternal(instance: object, objectId?: string): ObjectInfo | null;
-	/**
-	 * Untracks an object from synchronization.
-	 * Untracked objects are no longer prevented from being deleted and will be removed from clients when they are no longer used by them.
-	 * @param instance The instance to untrack.
-	 * @return True if the instance was untracked, false if it was not being tracked as a root object.
-	 */
-	untrack(instance: object): boolean;
-	/**
-	 * Internal use only: Called by ObjectInfo.
-	 */
-	reportInstanceCreated(instance: object, objectId: string): void;
-	/**
-	 * Internal use only: Called by ObjectInfo.
-	 */
-	findSerializer(instanceOrTypeId: object | string): TypeSerializerConstructor;
-	private handleCreateMessage;
-	private handleOtherMessage;
-	private handleDeleteMessage;
-	serializeValue(value: any, clientToken: ClientToken): SerializedValue;
-	deserializeValue(value: SerializedValue, clientToken: ClientToken): string | number | boolean | object | null | undefined;
-	/**
-	 * Applies messages from multiple clients asynchronously.
-	 * That means that serializers can return promises which allows the feature to wait for method execution results for syncObject decorator targets.
-	 * Messages are applied in a certain order:
-	 * - First all create messages are applied in the order they are received, regardless of the client they come from.
-	 *   This is to ensure that all objects are created before any changes are applied to them.
-	 *   Some create messages may be used earlier than others if they are needed to create objects which are referenced by other messages,
-	 *   but there is no guaranteed order between independent create messages.
-	 * - Then change messages are applied in the order they are received.
-	 * - Then execute messages are applied in the order they are received.
-	 *
-	 * @param messagesByClient A map of client connections to messages.
-	 */
-	applyMessagesAsync(messagesByClient: Map<ClientToken, Message[]>): Promise<void>;
-	/**
-	 * Applies messages from a client connection.
-	 * @param messages The messages to apply.
-	 * @param clientToken The client connection the messages are from.
-	 */
-	applyMessagesAsync(messages: Message[], clientToken: ClientToken): Promise<void>;
-	private sortMessages;
-	/**
-	 * Clears internal states, which are needed to store changes between synchronization cycles. Should be called after messages have been collected for all clients.
-	 */
-	clearStates(): void;
-	/**
-	 * Gets all messages to be sent to clients.
-	 * Will also reset internal tracking states.
-	 * @returns A map of client connections to messages.
-	 */
-	getMessages(): Map<ClientToken, Message[]>;
-	/**
-	 * Gets all messages to be sent to clients.
-	 * Will also reset internal tracking states when clearNonClientStates is true.
-	 * @param clearNonClientStates Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
-	 * @returns A map of client connections to messages.
-	 */
-	getMessages(clearNonClientStates: boolean): Map<ClientToken, Message[]>;
-	/**
-	 * Gets all messages to be sent to a single client.
-	 * Will also reset internal tracking states.
-	 * @param clientToken The client connection to get messages for.
-	 * @returns The messages for the specified client.
-	 */
-	getMessages(clientToken: ClientToken): Message[];
-	/**
-	 * Gets all messages to be sent to a single client.
-	 * Will also reset internal tracking states when clearNonClientStates is true.
-	 * @param clientToken The client connection to get messages for.
-	 * @param clearNonClientStates Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
-	 * @returns The messages for the specified client.
-	 */
-	getMessages(clientToken: ClientToken, clearNonClientStates: boolean): Message[];
-	/**
-	 * Gets all messages to be sent to multiple clients.
-	 * Will also reset internal tracking states.
-	 * @param clientTokens The client connections to get messages for.
-	 * @returns A map of client connections to messages.
-	 */
-	getMessages(clientTokens: ClientToken[]): Map<ClientToken, Message[]>;
-	/**
-	 * Gets all messages to be sent to multiple clients.
-	 * Will also reset internal tracking states when clearNonClientStates is true.
-	 * @param clientTokens The client connections to get messages for.
-	 * @param clearNonClientStates Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
-	 * @returns A map of client connections to messages.
-	 */
-	getMessages(clientTokens: ClientToken[], clearNonClientStates: boolean): Map<ClientToken, Message[]>;
-	private getMessagesForClients;
+	get all(): SyncAgentProvider[];
+	get common(): SyncAgentProvider[];
+	get intrinsics(): SyncAgentProvider[];
+	findOrThrow(instanceOrTypeId: object | string): SyncAgentProvider;
+	find(instanceOrTypeId: object | string): SyncAgentProvider | null;
+}
+declare class ObjectsView {
+	private readonly _core;
+	private readonly _predicate?;
+	constructor(_core: ObjectSyncCore, _predicate?: ((info: ObjectInfo) => boolean) | undefined);
+	protected get core(): ObjectSyncCore;
 	/**
 	 * Finds a tracked object by its object ID.
 	 * @param objectId Object ID to find a specific object.
@@ -374,6 +239,107 @@ export declare class ObjectSync {
 	 */
 	findAll<T extends object>(constructor: Constructor<T>): T[];
 	/**
+	 * Finds all tracked objects.
+	 */
+	get all(): object[];
+}
+declare class RootObjectsView extends ObjectsView {
+	private _allowedRootTypes;
+	constructor(core: ObjectSyncCore);
+	/**
+	 * Gets or sets the allowed root types that can be transmitted by a client. If not set, all types provided by sync agents will be allowed as root types.
+	 */
+	get allowedRootTypesFromClient(): Constructor[] | undefined;
+	set allowedRootTypesFromClient(types: Constructor[] | undefined);
+	/**
+	 * Checks if a type is allowed to be tracked as a root object when transmitted by a client. This checks if there is a sync agent provider for the type and if the type is included in the allowed root types (if specified).
+	 */
+	isTypeFromClientAllowed(constructorOrTypeId: Constructor | string): boolean;
+}
+export type TrackedObjectDisposable<TInstance extends object> = IDisposable & {
+	readonly objectId: string;
+	readonly instance: TInstance | undefined;
+};
+type SyncAgentType<TInstance> = TInstance extends Array<infer TItem> ? IArraySyncAgent<TItem> : TInstance extends Set<infer TItem> ? ISetSyncAgent<TItem> : TInstance extends Map<infer TKey, infer TValue> ? IMapSyncAgent<TKey, TValue> : TInstance extends object ? ISyncObjectSyncAgent<TInstance> : never;
+type SyncAgentOrFallback<TDispatcher extends ISyncAgent | null, TInstance> = TDispatcher extends null ? SyncAgentType<TInstance> : TDispatcher;
+type ObjectSyncEventMap = {
+	tracked(instance: object, syncAgent: ISyncAgent): void;
+};
+declare class ObjectSyncCore extends EventEmitter<ObjectSyncEventMap> {
+	private readonly _objectPool;
+	private readonly _weakObjectPool;
+	private readonly _objectsWithPendingMessages;
+	private readonly _clients;
+	private readonly _settings;
+	private readonly _pendingWeakDeletes;
+	private _nextObjectId;
+	private _pendingCreateMessageByObjectId;
+	private readonly _ownClientToken;
+	private readonly _syncAgentProviders;
+	private readonly _allObjects;
+	private readonly _rootObjects;
+	private readonly _pendingPromise;
+	constructor(settings: ObjectSyncSettings);
+	get allObjects(): ObjectsView;
+	get rootObjects(): RootObjectsView;
+	get settings(): FinalizedObjectSyncSettings;
+	get arrayChangeSetMode(): ArrayChangeSetMode;
+	reportPendingMessagesForObject(objectInfo: ObjectInfo): void;
+	generateObjectId(value?: object): string;
+	registerClient(settingsOrIdentity: ClientConnectionSettings | string): ClientToken;
+	get registeredClientTokens(): ClientToken[];
+	/**
+	 * Removes all client-specific state for a client (e.g., when disconnecting).
+	 */
+	unregisterClient(clientToken: ClientToken): void;
+	/**
+	 * Gets the identity of this ObjectSync instance.
+	 */
+	get identity(): string;
+	get syncAgentProviders(): SyncAgentProviders;
+	/**
+	 * Tracks an object for synchronization.
+	 * Must be called for root objects you want to track. Tracked root objects will never be automatically deleted.
+	 * @param instance The instance to track.
+	 * @param objectId Optional object ID to use for the tracked object. If not provided, a new object ID will be generated.
+	 * @return A disposable which can be used to untrack the object and access the tracked object's ID and instance (when still tracked).
+	 */
+	track<T extends object>(instance: T, objectId?: string): TrackedObjectDisposable<T>;
+	trackInternal(instance: object, objectId?: string): ObjectInfo | null;
+	/**
+	 * Untracks an object from synchronization.
+	 * Untracked objects are no longer prevented from being deleted and will be removed from clients when they are no longer used by them.
+	 * @param instance The instance to untrack.
+	 * @return True if the instance was untracked, false if it was not being tracked as a root object.
+	 */
+	untrack(instance: object): boolean;
+	/**
+	 * Internal use only: Called by ObjectInfo.
+	 */
+	reportInstanceCreated(instance: object, objectId: string): void;
+	private handleCreateMessage;
+	private handleOtherMessage;
+	private handleDeleteMessage;
+	serializeValue(value: any, clientToken: ClientToken): SerializedValue;
+	private checkIsTypeAllowed;
+	deserializeValue(value: SerializedValue, clientToken: ClientToken, allowedTypes?: (Constructor | undefined | null)[]): string | number | boolean | object | null | undefined;
+	applyMessagesAsync(messagesOrMessagesByClient: Message[] | Map<ClientToken, Message[]>, clientToken?: ClientToken): Promise<void>;
+	applyMessages(messagesOrMessagesByClient: Message[] | Map<ClientToken, Message[]>, clientToken?: ClientToken): Promise<any>[];
+	private sortMessages;
+	/**
+	 * Clears internal states, which are needed to store changes between synchronization cycles. Should be called after messages have been collected for all clients.
+	 */
+	clearStates(): void;
+	getMessages(clientOrClientsOrCallTick?: boolean | OneOrMany<ClientToken>, clearNonClientStates?: boolean): Map<ClientToken, Message[]> | Message[];
+	private getMessagesForClients;
+	findOne<T extends object>(constructorOrObjectId: Constructor<T> | string, objectId?: string, predicate?: (info: ObjectInfo) => boolean): T | undefined;
+	/**
+	 * Finds all tracked objects of a specific type.
+	 * @param constructor The constructor of the object type to find.
+	 * @returns An array of found objects.
+	 */
+	findAll<T extends object>(constructor?: Constructor<T>, predicate?: (info: ObjectInfo) => boolean): T[];
+	/**
 	 * Exchanges messages with clients by sending messages and receiving client messages.
 	 * @param settings Settings for exchanging messages.
 	 */
@@ -385,19 +351,21 @@ export declare class ObjectSync {
 	 * @param instance The tracked object instance.
 	 * @returns The dispatcher associated with the object instance, or null if none exists.
 	 */
-	getDispatcher<TDispatcher = null, TInstance extends object = any>(instance: TInstance): DispatcherOrFallback<TDispatcher, typeof instance> | null;
+	getSyncAgent<TDispatcher extends ISyncAgent | null = null, TInstance extends object = any>(instance: TInstance): SyncAgentOrFallback<TDispatcher, typeof instance>;
+	getSyncAgentOrNull(instance: any): ISyncAgent | null;
+	registerPendingPromise(promise: Promise<any>): void;
+	private awaitPendingPromises;
 }
 export declare class ObjectInfo<TInstance extends object = object> {
 	private _owner;
 	private _objectId;
 	private _isRoot;
-	private _serializer;
+	private _syncAgent;
 	private _instance;
-	private _clientFilters;
 	private _isOwned;
 	private _referenceCountByClient;
-	constructor(_owner: ObjectSync, _objectId?: string, instanceOrTypeId?: string | TInstance, _isRoot?: boolean);
-	initializeSerializer(instanceOrTypeId?: string | TInstance): void;
+	constructor(_owner: ObjectSyncCore, _objectId?: string, instanceOrTypeId?: string | TInstance, _isRoot?: boolean);
+	initializeSyncAgent(instanceOrTypeId?: string | TInstance): void;
 	get isOwned(): boolean;
 	set isOwned(value: boolean);
 	get objectId(): string;
@@ -405,21 +373,12 @@ export declare class ObjectInfo<TInstance extends object = object> {
 	set instance(value: TInstance);
 	get isRoot(): boolean;
 	set isRoot(value: boolean);
-	get serializer(): TypeSerializer;
-	get owner(): ObjectSync;
+	get syncAgent(): SyncAgent;
+	get owner(): ObjectSyncCore;
 	addReference(clientToken?: ClientToken): IDisposable;
 	get isOrphaned(): boolean;
 	mustDeleteForClient(clientToken: ClientToken): boolean;
 	private removeReference;
-	setClientRestriction(filter: ClientTokenFilter): void;
-	/**
-	 * Determines if this object is visible to a given client based on filters.
-	 */
-	isForClientToken(clientToken: ClientToken): boolean;
-	/**
-	 * Removes all client restrictions, making the object visible to all clients.
-	 */
-	removeClientRestrictions(): void;
 }
 type ReferenceStorageSettings = {
 	/**
@@ -463,12 +422,31 @@ type MultipleSerializeAndReferenceStorageSettings = SerializeAndReferenceStorage
 	 */
 	values: any[];
 };
-export declare abstract class TypeSerializer<TInstance extends object = object, TCreatePayload = any, TChangePayload = any> {
+type ISyncAgent<TInstance extends object = any> = {
+	/**
+	 * The ID of the object being synchronized.
+	 */
+	get objectId(): string;
+	/**
+	 * The actual instance being synchronized.
+	 */
+	get instance(): TInstance;
+	/**
+	 * The clients for which this agent is tracking the object.
+	 */
+	get clients(): Set<ClientToken>;
+	/**
+	 * Gets or sets a client restriction filter.
+	 * With this you can remove an object from beeing tracked for a specific client or group of clients, or make it only tracked for a specific client or group of clients.
+	 */
+	clientRestriction: ClientTokenFilter | null;
+};
+export declare abstract class SyncAgent<TInstance extends object = object, TCreatePayload = any, TChangePayload = any> implements ISyncAgent {
 	protected readonly _objectInfo: ObjectInfo<TInstance>;
-	static canSerialize(instanceOrTypeId: object | string): boolean;
 	private readonly _clients;
 	private readonly _storedReferencesByKey;
 	private _hasPendingChanges;
+	private _clientFilters;
 	constructor(_objectInfo: ObjectInfo<TInstance>);
 	protected get hasPendingChanges(): boolean;
 	protected set hasPendingChanges(value: boolean);
@@ -494,7 +472,7 @@ export declare abstract class TypeSerializer<TInstance extends object = object, 
 	 * Called when a client is removed to allow the serializer to clean up any references related to the client.
 	 * @param clientToken The client token being removed.
 	 */
-	onClientRemoved(clientToken: ClientToken): void;
+	onClientUnregistered(clientToken: ClientToken): void;
 	/**
 	 * Clears the states for the serializer.
 	 * @param clientToken Optional client token for which to clear the state. If not provided, clears the state not related to any specific client.
@@ -524,7 +502,7 @@ export declare abstract class TypeSerializer<TInstance extends object = object, 
 	/**
 	 * Deserializes a value (basically converts any ObjectReferences to actual object references).
 	 */
-	protected deserializeValue(value: SerializedValue, clientToken: ClientToken): string | number | boolean | object | null | undefined;
+	protected deserializeValue(value: SerializedValue, clientToken: ClientToken, allowedTypes?: (Constructor | undefined | null)[]): string | number | boolean | object | null | undefined;
 	/**
 	 * Generates messages to be sent to the client.
 	 * @param clientToken The client token for which to generate messages.
@@ -592,27 +570,64 @@ export declare abstract class TypeSerializer<TInstance extends object = object, 
 	 * @returns A message with the specified payload.
 	 */
 	protected createMessage<TMessage extends Message>(type: string, payload?: Omit<TMessage, "type" | "objectId">): TMessage;
-	get dispatcher(): any;
+	set clientRestriction(filter: ClientTokenFilter | null);
+	get clientRestriction(): ClientTokenFilter | null;
+	isForClientToken(clientToken: ClientToken): boolean;
 }
-export declare abstract class ExtendedTypeSerializer<TInstance extends object = object, TCreatePayload = any, TChangePayload = any> extends TypeSerializer<TInstance, TCreatePayload, TChangePayload> {
+export declare const defaultSyncAgentProviders: SyncAgentProvider[];
+export declare const defaultIntrinsicSyncAgentProviders: SyncAgentProvider[];
+type SyncAgentConstructor = new (objectInfo: ObjectInfo<any>) => SyncAgent;
+type SyncAgentProviderSettings = {
+	/**
+	 * The type of the SyncAgent that should be instanciated for the given syncType. This is used to determine which SyncAgent to use when creating a new SyncAgent for an object of the given syncType.
+	 */
+	syncAgentType: SyncAgentConstructor;
+	/**
+	 * The type that this SyncAgent can be used for. When creating a new SyncAgent for an object, the SyncAgentProvider will be asked if it can provide a SyncAgent for the object's type (or one of its base types). The first SyncAgentProvider that returns true will be used to create the SyncAgent for the object.
+	 */
+	syncType: Constructor;
+	/**
+	 * The typeId that this SyncAgent can be used for. This is used to determine which SyncAgent to use when deserializing an object from a message that contains a typeId. The first SyncAgentProvider that returns true for the typeId will be used to create the SyncAgent for the object.
+	 */
+	typeId: string;
+	/**
+	 * If true, the SyncAgentProvider will only be used for objects that are exactly of the syncType. If false or undefined, the SyncAgentProvider will be used for objects that are of the syncType or any of its subtypes. The default is false.
+	 */
+	matchExactType?: boolean;
+	/**
+	 * Whether this SyncAgentProvider should be added to the default intrinsic SyncAgentProviders list. Default is false. Intrinsic SyncAgentProviders are used by default when creating SyncAgents for objects, and are checked after non-intrinsic SyncAgentProviders.
+	 */
+	isIntrinsic?: boolean;
+	/**
+	 * The priority of the SyncAgentProvider. When multiple SyncAgentProviders can provide a SyncAgent for a given type or typeId, the one with the highest priority will be used. The default priority is 0.
+	 */
+	priority?: number;
+};
+declare class SyncAgentProvider {
+	private readonly _settings;
+	constructor(_settings: SyncAgentProviderSettings);
+	get priority(): number;
+	get syncType(): Constructor;
+	canProvideAgentFor(typeOrTypeId: object | string): boolean;
+	createAgent(objectInfo: ObjectInfo): SyncAgent;
+}
+export declare abstract class ExtendedSyncAgent<TInstance extends object = object, TCreatePayload = any, TChangePayload = any> extends SyncAgent<TInstance, TCreatePayload, TChangePayload> {
 	private readonly _messageTypeToHandler;
+	private _isApplyingMessages;
 	constructor(objectInfo: ObjectInfo<TInstance>);
-	protected registerMessageHandler<TMessage extends Message>(messageType: string, handler: (message: TMessage, clientToken: ClientToken) => void | Promise<void>): void;
-	applyMessage(message: Message, clientToken: ClientToken): void | Promise<void>;
+	protected get isApplyingMessages(): boolean;
+	protected registerMessageHandler<TMessage extends Message>(messageType: string, handler: (message: TMessage, clientToken: ClientToken) => void): void;
+	applyMessage(message: Message, clientToken: ClientToken): void;
 	abstract onCreateMessageReceived(message: CreateObjectMessage<TCreatePayload>, clientToken: ClientToken): void;
 	onChangeMessageReceived(message: ChangeObjectMessage<TChangePayload>, clientToken: ClientToken): void;
 }
-export type TypeSerializerConstructor<TTypeSerializer extends TypeSerializer = TypeSerializer, TInstance extends object = any> = {
-	new (objectInfo: ObjectInfo<TInstance>): TTypeSerializer;
-	canSerialize(instanceOrTypeId: object | string): boolean;
-};
-type SimpleTypeSerializerSettings<TInstance extends object, TPayload = any> = {
+type SimpleTypeSyncAgentSettings<TInstance extends object, TPayload = any> = {
 	type: Constructor<TInstance>;
 	typeId: string;
 	serialize: (obj: TInstance) => TPayload;
 	deserialize: (data: TPayload) => TInstance;
 };
-export declare function createSimpleTypeSerializerClass<TInstance extends object, TPayload = any>(settings: SimpleTypeSerializerSettings<TInstance, TPayload>): TypeSerializerConstructor;
+export declare function createSimpleSyncAgentProvider<TInstance extends object, TPayload = any>(settings: SimpleTypeSyncAgentSettings<TInstance, TPayload>): SyncAgentProvider;
 export declare const nothing: unique symbol;
 type CanTrackPayload<T extends object, TKey extends keyof T & string> = {
 	instance: T;
@@ -628,6 +643,13 @@ type BeforeSendToClientPayload<T extends object, TKey extends keyof T & string, 
 	key: TKey;
 	value: TValue;
 	destinationClientToken: ClientToken;
+};
+type AfterValueChangedPayload<T extends object, TKey extends keyof T & string, TValue> = {
+	instance: T;
+	key: TKey;
+	value: TValue;
+	sourceClientToken: ClientToken | null;
+	syncAgent: ISyncAgent | null;
 };
 type TrackedPropertySettingsBase<T extends object> = {
 	/**
@@ -654,6 +676,16 @@ type TrackedPropertySettings<T extends object, TValue> = TrackedPropertySettings
 	 * When the symbol value "nothing" is returned, the property update will be skipped.
 	 */
 	beforeSendToClient?<TKey extends keyof T & string>(this: T, payload: BeforeSendToClientPayload<T, TKey, TValue>): TValue | typeof nothing;
+	/**
+	 * List of allowed types which can be assigned from the sender.
+	 * When a value of a different type is assigned from the sender, the application will throw an error.
+	 * When not provided, all types are allowed.
+	 */
+	allowedTypesFromSender?: Array<Constructor | null | undefined>;
+	/**
+	 * Function which is called after the property value has been applied from a client.
+	 */
+	afterValueChanged?<TKey extends keyof T & string>(this: T, payload: AfterValueChangedPayload<T, TKey, TValue>): void;
 };
 /**
  * Property accessor decorator for marking a property as trackable.
@@ -662,7 +694,7 @@ type TrackedPropertySettings<T extends object, TValue> = TrackedPropertySettings
 export declare function syncProperty<This extends object, Return>(settings?: TrackedPropertySettings<This, Return>): (target: ClassAccessorDecoratorTarget<This, Return>, context: ClassAccessorDecoratorContext<This, Return>) => ClassAccessorDecoratorResult<This, Return>;
 type UnwrapPromise<T> = T extends Promise<infer U> ? U : T;
 type MethodReturnType<T extends object, K extends keyof T> = T[K] extends (...args: any[]) => infer U ? UnwrapPromise<U> : never;
-export interface ISyncObjectDispatcher<TInstance extends object = object> {
+export interface ISyncObjectSyncAgent<TInstance extends object = object> extends ISyncAgent<TInstance> {
 	/**
 	 * Invokes a method on all currently known clients.
 	 * @param method The method name to invoke.
@@ -707,12 +739,181 @@ type TrackedMethodSettings<T extends object> = TrackedPropertySettingsBase<T> & 
 	 * When false is returned, the method call will be skipped.
 	 */
 	beforeExecuteOnClient?<TKey extends keyof T & string>(this: T, payload: BeforeExecuteOnClientPayload<T, TKey>): boolean;
+	/**
+	 * List of allowed types which can be returned from the sender to the receiver.
+	 * When a value of a different type is returned from the sender, the application will throw an error.
+	 * When not provided, all types are allowed.
+	 */
+	allowedReturnTypesFromSender?: Array<Constructor | null | undefined>;
+	/**
+	 * List of allowed types which can be returned from the sender to the receiver as a rejection reason.
+	 * When a value of a different type is returned from the sender, the application will throw an error.
+	 * When not provided, all types are allowed.
+	 */
+	allowedRejectionTypesFromSender?: Array<Constructor | null | undefined>;
+	/**
+	 * List of allowed types which can be assigned to the method parameters from the sender.
+	 * When a value of a different type is assigned from the sender, the method invocation will return an error.
+	 * When not provided, all types are allowed.
+	 * The array index corresponds to the method parameter index. If a parameter index is missing, no types are allowed for that parameter.
+	 */
+	allowedParameterTypesFromSender?: Array<Array<Constructor | null | undefined>>;
 };
 /**
  * Method decorator for marking a method as trackable.
  * Ensures method calls are recorded for all TrackableObject instances.
  */
 export declare function syncMethod<This extends object, Return>(settings?: TrackedMethodSettings<This>): (target: any, context: ClassMethodDecoratorContext) => void;
+export declare class ObjectSync implements IEventEmitter<ObjectSyncEventMap> {
+	private readonly _core;
+	constructor(settings: ObjectSyncSettings);
+	on<Event extends keyof ObjectSyncEventMap>(event: Event, callback: ObjectSyncEventMap[Event]): void;
+	once<Event extends keyof ObjectSyncEventMap>(event: Event, callback: ObjectSyncEventMap[Event]): void;
+	off<Event extends keyof ObjectSyncEventMap>(event: Event, callback: ObjectSyncEventMap[Event]): void;
+	listenerCount<Event extends keyof ObjectSyncEventMap>(event: Event, callback?: ObjectSyncEventMap[Event] | undefined): number;
+	/**
+	 * Gets a view of all tracked objects. This includes all objects which are currently tracked, including root objects and objects which are only used by clients but not explicitly tracked.
+	 */
+	get allObjects(): ObjectsView;
+	/**
+	 * Gets a view of all tracked root objects. Root objects are objects which are explicitly tracked and will never be automatically deleted.
+	 */
+	get rootObjects(): RootObjectsView;
+	/**
+	 * Registers a new client connection.
+	 * @param identity The identity of the client connection.
+	 * @returns The token to the newly registered client connection.
+	 */
+	registerClient(identity: string): ClientToken;
+	/**
+	 * Registers a new client connection.
+	 * @param settings Settings for the client connection.
+	 * @returns The token to the newly registered client connection.
+	 */
+	registerClient(settings: ClientConnectionSettings): ClientToken;
+	/**
+	 * Removes all client-specific state for a client (e.g., when disconnecting).
+	 */
+	unregisterClient(clientToken: ClientToken): void;
+	/**
+	 * Gets the identity of this ObjectSync instance.
+	 */
+	get identity(): string;
+	/**
+	 * Tracks an object for synchronization.
+	 * Must be called for root objects you want to track. Tracked root objects will never be automatically deleted.
+	 * @param instance The instance to track.
+	 * @param objectId Optional object ID to use for the tracked object. If not provided, a new object ID will be generated.
+	 * @return A disposable which can be used to untrack the object and access the tracked object's ID and instance (when still tracked).
+	 */
+	track<T extends object>(instance: T, objectId?: string): TrackedObjectDisposable<T>;
+	/**
+	 * Untracks an object from synchronization.
+	 * Untracked objects are no longer prevented from being deleted and will be removed from clients when they are no longer used by them.
+	 * @param instance The instance to untrack.
+	 * @return True if the instance was untracked, false if it was not being tracked as a root object.
+	 */
+	untrack(instance: object): boolean;
+	/**
+	 * Applies messages from multiple clients asynchronously.
+	 * That means that serializers can return promises which allows the feature to wait for method execution results for syncObject decorator targets.
+	 * Messages are applied in a certain order:
+	 * - First all create messages are applied in the order they are received, regardless of the client they come from.
+	 *   This is to ensure that all objects are created before any changes are applied to them.
+	 *   Some create messages may be used earlier than others if they are needed to create objects which are referenced by other messages,
+	 *   but there is no guaranteed order between independent create messages.
+	 * - Then change messages are applied in the order they are received.
+	 * - Then execute messages are applied in the order they are received.
+	 *
+	 * @param messagesByClient A map of client connections to messages.
+	 */
+	applyMessagesAsync(messagesByClient: Map<ClientToken, Message[]>): Promise<void>;
+	/**
+	 * Applies messages from a client connection.
+	 * @param messages The messages to apply.
+	 * @param clientToken The client connection the messages are from.
+	 */
+	applyMessagesAsync(messages: Message[], clientToken: ClientToken): Promise<void>;
+	/**
+	 * Applies messages from multiple clients synchronously.
+	 * Messages are applied in a certain order:
+	 * - First all create messages are applied in the order they are received, regardless of the client they come from.
+	 *   This is to ensure that all objects are created before any changes are applied to them.
+	 *   Some create messages may be used earlier than others if they are needed to create objects which are referenced by other messages,
+	 *   but there is no guaranteed order between independent create messages.
+	 * - Then change messages are applied in the order they are received.
+	 * - Then execute messages are applied in the order they are received.
+	 *
+	 * @param messagesByClient A map of client connections to messages.
+	 */
+	applyMessages(messagesByClient: Map<ClientToken, Message[]>): Promise<any>[];
+	/**
+	 * Applies messages from a client connection.
+	 * @param messages The messages to apply.
+	 * @param clientToken The client connection the messages are from.
+	 */
+	applyMessages(messages: Message[], clientToken: ClientToken): Promise<any>[];
+	/**
+	 * Clears internal states, which are needed to store changes between synchronization cycles. Should be called after messages have been collected for all clients.
+	 */
+	clearStates(): void;
+	/**
+	 * Gets all messages to be sent to clients.
+	 * Will also reset internal tracking states.
+	 * @returns A map of client connections to messages.
+	 */
+	getMessages(): Map<ClientToken, Message[]>;
+	/**
+	 * Gets all messages to be sent to clients.
+	 * Will also reset internal tracking states when clearNonClientStates is true.
+	 * @param clearNonClientStates Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+	 * @returns A map of client connections to messages.
+	 */
+	getMessages(clearNonClientStates: boolean): Map<ClientToken, Message[]>;
+	/**
+	 * Gets all messages to be sent to a single client.
+	 * Will also reset internal tracking states.
+	 * @param clientToken The client connection to get messages for.
+	 * @returns The messages for the specified client.
+	 */
+	getMessages(clientToken: ClientToken): Message[];
+	/**
+	 * Gets all messages to be sent to a single client.
+	 * Will also reset internal tracking states when clearNonClientStates is true.
+	 * @param clientToken The client connection to get messages for.
+	 * @param clearNonClientStates Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+	 * @returns The messages for the specified client.
+	 */
+	getMessages(clientToken: ClientToken, clearNonClientStates: boolean): Message[];
+	/**
+	 * Gets all messages to be sent to multiple clients.
+	 * Will also reset internal tracking states.
+	 * @param clientTokens The client connections to get messages for.
+	 * @returns A map of client connections to messages.
+	 */
+	getMessages(clientTokens: ClientToken[]): Map<ClientToken, Message[]>;
+	/**
+	 * Gets all messages to be sent to multiple clients.
+	 * Will also reset internal tracking states when clearNonClientStates is true.
+	 * @param clientTokens The client connections to get messages for.
+	 * @param clearNonClientStates Whether to advance the internal state of the tracker after gathering messages. Defaults to true.
+	 * @returns A map of client connections to messages.
+	 */
+	getMessages(clientTokens: ClientToken[], clearNonClientStates: boolean): Map<ClientToken, Message[]>;
+	/**
+	 * Exchanges messages with clients by sending messages and receiving client messages.
+	 * @param settings Settings for exchanging messages.
+	 */
+	exchangeMessagesAsync(settings: ExchangeMessagesSettings): Promise<void>;
+	/**
+	 * Gets the dispatcher associated with a tracked object instance.
+	 * A dispatcher is different for each kind of object and returned by its associated serializer.
+	 * USe this to configure ninstance based serializer settings.
+	 * @param instance The tracked object instance.
+	 * @returns The dispatcher associated with the object instance, or null if none exists.
+	 */
+	getSyncAgent<TDispatcher extends ISyncAgent | null = null, TInstance extends object = any>(instance: TInstance): SyncAgentOrFallback<TDispatcher, typeof instance>;
+}
 type PossibleClientTypeResults = string | typeof nothing | Constructor | null;
 type ConstructorArgumentsFunctionPayload<T extends object> = ClientTypeIdFunctionPayload<T>;
 type ClientTypeIdFunctionPayload<T extends object> = {
@@ -745,6 +946,13 @@ type TrackableObjectSettings<T extends object> = {
 		propertiesToOmit?: string[];
 		arguments: any[];
 	});
+	/**
+	 * List of allowed types which can be assigned to the constructor parameters from the sender.
+	 * When a value of a different type is assigned from the sender, the application will throw an error.
+	 * When not provided, all types are allowed.
+	 * The array index corresponds to the constructor parameter index. If a parameter index is missing, no types are allowed for that parameter.
+	 */
+	allowedConstructorParameterTypesFromSender?: Array<Array<Constructor | null | undefined>>;
 };
 /**
  * Class decorator for marking a class as auto-trackable by the host.
@@ -784,7 +992,7 @@ export declare class SyncableObservableArray<T = any> extends SyncableArray<T> i
 	off<Event extends keyof SyncableObservableArrayEventMap>(event: Event, callback: SyncableObservableArrayEventMap[Event]): void;
 	listenerCount<Event extends keyof SyncableObservableArrayEventMap>(event: Event, callback?: SyncableObservableArrayEventMap[Event] | undefined): number;
 }
-export interface IArrayDispatcher<TElement = any> {
+export interface IArraySyncAgent<TElement = any> extends ISyncAgent<Array<TElement>> {
 	/**
 	 * Reports a splice operation on the array. Can be used to manually notify about changes (for plain Arrays).
 	 * Will throw an error if arrayChangeSetMode is not set to "compareStates".
@@ -803,10 +1011,14 @@ export interface IArrayDispatcher<TElement = any> {
 	 * Gets or sets the array change set mode, default value is the value from the ObjectSync settings.
 	 */
 	changeSetMode: "trackSplices" | "compareStates";
+	/**
+	 * Gets or sets the allowed types which can be sent from the sender for this array. This is a security measure to prevent clients from sending unexpected types which may be used to cause issues on the receiving end (e.g., by sending very large objects or objects with getters that execute expensive code). If not set, all types provided by sync agents will be allowed.
+	 */
+	allowedTypesFromSender: Constructor[] | undefined;
 }
-export declare const SyncableObservableArraySerializer: TypeSerializerConstructor;
-export declare const SyncableArraySerializer: TypeSerializerConstructor;
-export declare const ArraySerializer: TypeSerializerConstructor;
+export declare const SyncableObservableArraySyncAgentProvider: SyncAgentProvider;
+export declare const SyncableArraySyncAgentProvider: SyncAgentProvider;
+export declare const ArraySyncAgentProvider: SyncAgentProvider;
 export declare class SyncableMap<K = any, V = any> extends Map<K, V> {
 	constructor(iterable?: Iterable<readonly [
 		K,
@@ -831,14 +1043,22 @@ export declare class SyncableObservableMap<K = any, V = any> extends SyncableMap
 	off<Event extends keyof SyncableObservableMapEventMap>(event: Event, callback: SyncableObservableMapEventMap[Event]): void;
 	listenerCount<Event extends keyof SyncableObservableMapEventMap>(event: Event, callback?: SyncableObservableMapEventMap[Event] | undefined): number;
 }
-export interface IMapDispatcher<TKey = any, TValue = any> {
+export interface IMapSyncAgent<TKey = any, TValue = any> extends ISyncAgent<Map<TKey, TValue>> {
 	reportClear(): void;
 	reportDelete(key: TKey): void;
 	reportChange(key: TKey, value: TValue): void;
+	/**
+	 * Gets or sets the allowed types which can be sent from the sender. This is a security measure to prevent clients from sending unexpected types which may be used to cause issues on the receiving end (e.g., by sending very large objects or objects with getters that execute expensive code). If not set, all types provided by sync agents will be allowed.
+	 */
+	allowedKeyTypesFromSender: Constructor[] | undefined;
+	/**
+	 * Gets or sets the allowed types which can be sent from the sender. This is a security measure to prevent clients from sending unexpected types which may be used to cause issues on the receiving end (e.g., by sending very large objects or objects with getters that execute expensive code). If not set, all types provided by sync agents will be allowed.
+	 */
+	allowedValueTypesFromSender: Constructor[] | undefined;
 }
-export declare const SyncableObservableMapSerializer: TypeSerializerConstructor;
-export declare const SyncableMapSerializer: TypeSerializerConstructor;
-export declare const MapSerializer: TypeSerializerConstructor;
+export declare const SyncableObservableMapSyncAgentProvider: SyncAgentProvider;
+export declare const SyncableMapSyncAgentProvider: SyncAgentProvider;
+export declare const MapSyncAgentProvider: SyncAgentProvider;
 export declare class SyncableSet<V> extends Set<V> {
 	constructor(iterable?: Iterable<V> | null);
 	add(value: V): this;
@@ -860,62 +1080,36 @@ export declare class SyncableObservableSet<T = any> extends SyncableSet<T> imple
 	off<Event extends keyof SyncableObservableSetEventMap>(event: Event, callback: SyncableObservableSetEventMap[Event]): void;
 	listenerCount<Event extends keyof SyncableObservableSetEventMap>(event: Event, callback?: SyncableObservableSetEventMap[Event] | undefined): number;
 }
-export interface ISetDispatcher<TValue = any> {
+export interface ISetSyncAgent<TValue = any> extends ISyncAgent<Set<TValue>> {
 	reportClear(): void;
 	reportDelete(value: TValue): void;
 	reportAdd(value: TValue): void;
+	/**
+	 * Gets or sets the allowed types which can be sent from the sender. This is a security measure to prevent clients from sending unexpected types which may be used to cause issues on the receiving end (e.g., by sending very large objects or objects with getters that execute expensive code). If not set, all types provided by sync agents will be allowed.
+	 */
+	allowedTypesFromSender: Constructor[] | undefined;
 }
-export declare const SyncableObservableSetSerializer: TypeSerializerConstructor;
-export declare const SyncableSetSerializer: TypeSerializerConstructor;
-export declare const SetSerializer: TypeSerializerConstructor;
-type TInstance = object;
-type TPayload = object;
-export declare class ObjectSerializer extends ExtendedTypeSerializer<TInstance, TPayload> {
-	static canSerialize(instanceOrTypeId: object | string): boolean;
-	getTypeId(clientToken: ClientToken): string;
-	onInstanceSet(createdByCreateObjectMessage: boolean): void;
-	onCreateMessageReceived(message: CreateObjectMessage<TPayload>, clientToken: ClientToken): void;
-	onChangeMessageReceived(message: ChangeObjectMessage<TPayload>, clientToken: ClientToken): void;
-	generateMessages(clientToken: ClientToken, isNewClient: boolean): Message[];
-	private getSerializedData;
-}
-export declare const defaultIntrinsicSerializers: TypeSerializerConstructor[];
-export declare const defaultSerializersOrTypes: (TypeSerializerConstructor | Constructor)[];
-type SyncSerializerSettings<TSerializer extends TypeSerializer> = {
+export declare const SyncableObservableSetSyncAgentProvider: SyncAgentProvider;
+export declare const SyncableSetSyncAgentProvider: SyncAgentProvider;
+export declare const SetSyncAgentProvider: SyncAgentProvider;
+type SyncAgentSettings<TSyncAgent extends SyncAgent> = {
 	/**
 	 * When provided will add a symbol to the type which tells it to use this serializer.
 	 * You can then use the type in the ObjectSync creation settings as serializer.
 	 */
-	type?: Constructor;
-} & ({
-	/**
-	 * Uses this type id then checking whether this serializer can serialize an object.
-	 */
-	typeId: string;
-	/**
-	 * Uses the provided type to check whether this serializer can serialize an object.
-	 */
 	type: Constructor;
-} | {
 	/**
-	 * Custom canSerialize function.
-	 * @param instanceOrTypeId An instance of the type or a type id.
-	 * @returns Whether this serializer can serialize the provided instance or type id.
+	 * The typeId to use for this sync agent. If not provided, the name of the type will be used.
 	 */
-	canSerialize(instanceOrTypeId: object | string): boolean;
-}) & ({
+	typeId?: string;
+} & {
 	/**
-	 * Whether this serializer should be added to the default serializers list. Default is true.
+	 * Whether this sync agent should be added to the default intrinsic sync agents list. Default is false.
 	 */
-	defaultSerializer?: boolean;
-} | {
-	/**
-	 * Whether this serializer should be added to the default intrinsic serializers list. Default is false.
-	 */
-	defaultIntrinsicSerializer?: boolean;
-});
-export declare function syncSerializer<This extends new (...args: any) => TypeSerializer>(settings: SyncSerializerSettings<InstanceType<This>>): (target: This, context: ClassDecoratorContext<This>) => void;
-export type StandaloneSerializationSettings = {
+	defaultIntrinsicSyncAgentProvider?: boolean;
+};
+export declare function syncAgent<This extends new (...args: any) => SyncAgent>(settings: SyncAgentSettings<InstanceType<This>>): (target: This, context: ClassDecoratorContext<This>) => void;
+export type StandaloneSerializationSettings = Pick<ObjectSyncSettings, "objectIdGeneratorSettings" | "intrinsics" | "types"> & {
 	/**
 	 * Identity of the internal ObjectSync instance, defaults to "host".
 	 */
@@ -924,24 +1118,6 @@ export type StandaloneSerializationSettings = {
 	 * Identity of the internal client ObjectSync instance, defaults to "client".
 	 */
 	clientIdentity?: string;
-	/**
-	 * Type serializers to use for serializing and deserializing property values during synchronization.
-	 * Can either be provided as an array of type serializers or constructors of SyncObject types.
-	 * When constructors are provided, the corresponding internal TypeSerializer will be used.
-	 * When not provided, all registered types and serializers will be used.
-	 */
-	serializers?: (TypeSerializerConstructor | Constructor)[];
-	/**
-	 * Intrinsic type serializers to use for serializing and deserializing base types (Array, Map, Set, Object) during synchronization.
-	 * Can be provided as an array of type serializers.
-	 * When not provided, default intrinsic type serializers will be used.
-	 */
-	intrinsicSerializers?: TypeSerializerConstructor[];
-	/**
-	 * Settings for generating object IDs.
-	 * When not provided, a default generator with the identity as prefix will be used (eg: "host-1").
-	 */
-	objectIdGeneratorSettings?: ObjectIdGeneratorSettings;
 };
 /**
  * Serializes the given value into a string that can be deserialized later using `deserializeValue`.

@@ -10,18 +10,6 @@ Can also be used to simply serialize an object tree for later deserialization.
 This library does not handle the connection or communication layer (such as transferring messages over ports, sockets, or other transport mechanisms).  
 You are responsible for implementing the connection layer and for sending/receiving messages between host and client using your preferred method.
 
-**Security Note:**
-
-To prevent malicious or invalid data from being transferred, you must verify and validate all incoming and outgoing data yourself.  
-Use the hooks provided by decorator functions (such as `canApply`, `canTrack`, `beforeSendToClient`, and `beforeExecuteOnClient`) to implement custom validation, filtering, and access control logic for your application.
-
-An `ObjectSync` instance will only create or instantiate types registered in its `serializers` and `intrinsicSerializers` list.  
-By default, all known types marked with `@syncObject` are allowed unless you restrict the configuration.  
-This is not a strict security measure.
-
-If you need to limit which types can be synchronized and instantiated, you must explicitly control the contents of `serializers` and `intrinsicSerializers`.  
-`intrinsicSerializers` contains serializers to handle `Set`, `Array`, `Map` and `Object` types.
-
 ## Key API Features
 
 - **Synchronize state between host and multiple clients:**
@@ -41,6 +29,7 @@ If you need to limit which types can be synchronized and instantiated, you must 
   Once execution is finished the host will know their results.
 
 - **Decorator-based API:**
+  - `@syncAgent`: Automatically creates and registers SyncAgentProvider for a custom SyncProvider.
   - `@syncObject`: Marks a class as trackable and synchronizable.
   - `@syncProperty`: Marks a property for change tracking and synchronization. Supports hooks for value manipulation and permission checks.
   - `@syncMethod`: Marks a method for remote invocation and synchronization. Supports hooks for argument manipulation and permission checks.
@@ -120,8 +109,8 @@ import { ObjectSync } from "simple-object-sync";
 const hostSync = new ObjectSync({
   // Unique identity for the host
   identity: "host",
-  // Optional list of serializers/types that should be supported
-  serializers: [SomeTrackableClass],
+  // Optional list of syncAgents/types that should be supported
+  syncAgents: [SomeTrackableClass],
 });
 
 // Register multiple clients with unique identities
@@ -163,7 +152,7 @@ const alpha = new SyncableArray<string>("alpha", "beta");
 hostSync.track(alpha);
 
 // Client: Find the synchronized array instance
-const alphaClient = clientSync.findOne(SyncableArray<string>)!;
+const alphaClient = clientSync.rootObjects.findOne(SyncableArray<string>)!;
 assert.deepStrictEqual(alpha, alphaClient); // Values are kept in sync
 ```
 
@@ -175,7 +164,7 @@ const alpha = new SyncableObservableArray<string>("alpha", "beta");
 hostSync.track(alpha);
 
 // Client: Find the synchronized array instance
-const alphaClient = clientSync.findOne(SyncableObservableArray<string>)!;
+const alphaClient = clientSync.rootObjects.findOne(SyncableObservableArray<string>)!;
 
 // Listen for items being added
 alphaClient.on("added", (itemsAdded: string[]) => {
@@ -209,8 +198,8 @@ hostSync.track(array);
 array[0] = "gamma";
 array.push("delta");
 
-const arrayDispatcher = hostSync.getDispatcher(array)!;
-arrayDispatcher.reportSplice();
+const arraySyncAgent = hostSync.getSyncAgent(array)!;
+arraySyncAgent.reportSplice();
 ```
 
 ### Set and Map Synchronization
@@ -231,13 +220,13 @@ const set = new SyncableSet<string>(["a", "b", "c"]);
 hostSync.track(set);
 ```
 
-### Custom Serializable Types
+### Custom SyncAgents (serializer, deserializer and state tracker)
 
-You can add custom serializers with varying complexity.  
-Serializers work by generating multiple messages needed to construct and interact with instances of the type the serializer should handle.
+You can add custom sync agent with varying complexity.  
+Sync agents work by generating multiple messages needed to construct and interact with instances of the type the agent should handle.
 
 The simplest form will generate a `create` message and apply this message when received.  
-To further simplify the creation of serializers this library provides the `createSimpleTypeSerializerClass` helper method to create ready to use serializer class for simple types:
+To further simplify the creation of agents this library provides the `createSimpleSyncAgentProvider` helper method to create ready to use agent and agent provider for simple types:
 
 ```typescript
 class MySerializableClass {
@@ -253,9 +242,9 @@ class MySerializableClass {
 }
 ...
 
-import { createSimpleTypeSerializerClass } from "simple-object-sync";
+import { createSimpleSyncAgentProvider } from "simple-object-sync";
 
-const MySerializableClassSerializer = createSimpleTypeSerializerClass<MySerializableClass, number>({
+const provider = createSimpleSyncAgentProvider<MySerializableClass, number>({
   typeId: "MySerializableClass",
   type: MySerializableClass,
   serialize: (obj: MySerializableClass) => obj.value,
@@ -264,15 +253,15 @@ const MySerializableClassSerializer = createSimpleTypeSerializerClass<MySerializ
 
 const hostSync = new ObjectSync({
   ...
-  // Register the serializer
-  serializers: [MySerializableClassSerializer, ...],
+  // Register the agent provider
+  types: [provider, ...],
 
-  // You can also just register the type, the system will automatically grab the serializer you created
-  serializers: [MySerializableClass, ...],
+  // You can also just register the type, the system will automatically grab the agent provider it created for a type
+  types: [MySerializableClass, ...],
 });
 ```
 
-More complex serializers can be implemented by either extending the `TypeSerializer` or `ExtendedTypeSerializer` class:
+More complex agents can be implemented by either extending the `SyncAgent` or `ExtendedSyncAgent` class:
 
 ```typescript
 import { EventEmitter } from "simple-object-sync";
@@ -301,17 +290,17 @@ class MyClass extends EventEmitter<EventMap> {
 ```
 
 ```typescript
-import { ExtendedTypeSerializer, ObjectInfo, syncSerializer, Message, ChangeObjectMessage, CreateObjectMessage } from "simple-object-sync";
+import { ExtendedSyncAgent, ObjectInfo, syncAgent, Message, ChangeObjectMessage, CreateObjectMessage } from "simple-object-sync";
 
 const TYPE_ID = "MySerializableClass";
 
-@syncSerializer({
+@syncAgent({
   typeId: TYPE_ID,
   type: MySerializableClass,
 })
-class MySerializableClassSerializer extends ExtendedTypeSerializer<TMySerializableClassInstance> {
+class MySerializableSyncAgent extends ExtendedSyncAgent<MySerializableClass> {
   constructor(objectInfo: ObjectInfo) {
-    super(objectInfo)
+    super(objectInfo);
   }
 
   public override getTypeId(clientToken: ClientToken) {
@@ -343,18 +332,20 @@ class MySerializableClassSerializer extends ExtendedTypeSerializer<TMySerializab
 }
 ```
 
-#### Transfering references with an TypeSerializer
+The `@syncAgent` decorator does only create a `SyncAgentProvider` instance witht he provided settings. You can extend from the `SyncAgentProvider` class and create custom compatibility check methods if you need.
+
+#### Transfering references within a SyncAgent
 
 The library contains a memory management system which relies on the knowledge if any references are used and by which client it is used.  
 When you want to transfer reference types you must serialize and deserialize those values into a form that the library understands,  
 also you need to keep track of the reference usage.
 
-The library and the base TypeSerializers provide methods to do just that.
+The library and the base SyncAgents provide methods to do just that.
 
 Generating messages for a client (`generateMessages`):
 
-- serialize the value (primitive or reference) by using the `TypeSerializer.serializeValue(value: any, clientToken: ClientToken): SerializedValue` method.
-- mark the reference or primitive as in use with the `TypeSerializer.storeReference(settings: ReferenceStorageSettings): IDisposable` method.
+- serialize the value (primitive or reference) by using the `SyncAgent.serializeValue(value: any, clientToken: ClientToken): SerializedValue` method.
+- mark the reference or primitive as in use with the `SyncAgent.storeReference(settings: ReferenceStorageSettings): IDisposable` method.
 
 ```typescript
 // In this example we assume that the instance is an Array
@@ -383,13 +374,13 @@ If you store an other reference with the same `clientToken` and `key` the librar
 
 You can clear all stored references by `key` or `clientToken` too, which can be useful when a change would clear everything:
 
-- `TypeSerializer.clearStoredReferencesWithKey(key: any)`
-- `TypeSerializer.clearStoredReferencesWithClientToken(clientToken: ClientToken)`
+- `SyncAgent.clearStoredReferencesWithKey(key: any)`
+- `SyncAgent.clearStoredReferencesWithClientToken(clientToken: ClientToken)`
 
 When applying those messages we do not need to store a reference to it,  
 but we must deserialize the transferred serialized value back to a normal usable value, by doing this the library ensures that transferred references will be used or created.
 
-- deserialize the serialized value by using the `TypeSerializer.deserializeValue(value: SerializedValue, clientToken: ClientToken)` method.
+- deserialize the serialized value by using the `SyncAgent.deserializeValue(value: SerializedValue, clientToken: ClientToken)` method.
 
 ```typescript
 type TCreatePayload = SerializedValue[];
@@ -534,8 +525,8 @@ class MyTrackableClass {
 This is how to execute a method on all currently connected clients:
 
 ```typescript
-const dispatcher = hostObjectSync.getDispatcher(myHostObject);
-const resultsByClient: Map<ClientToken, Promise<string>> = dispatcher.invoke("someMethod", someArgument);
+const syncAgent = hostObjectSync.getSyncAgent(myHostObject);
+const resultsByClient: Map<ClientToken, Promise<string>> = syncAgent.invoke("someMethod", someArgument);
 
 ...
 
@@ -547,14 +538,14 @@ const clientResult = await resultsByClient.get(someClientToken);
 Methods can also be executed on a specific client set:
 
 ```typescript
-const resultsByClient: Map<ClientToken, Promise<string>> = dispatcher.invoke([clientToken1, clientToken2], "someMethod", someArgument);
+const resultsByClient: Map<ClientToken, Promise<string>> = syncAgent.invoke([clientToken1, clientToken2], "someMethod", someArgument);
 ```
 
 Or just on a single client:
 
 ```typescript
-const dispatcher = hostObjectSync.getDispatcher(myHostObject);
-const clientResult: Promise<string> = dispatcher.invoke(clientToken1, "someMethod", someArgument);
+const syncAgent = hostObjectSync.getSyncAgent(myHostObject);
+const clientResult: Promise<string> = syncAgent.invoke(clientToken1, "someMethod", someArgument);
 ```
 
 The result promises will automatically be rejected when the client prohibits it or when a client gets unregistered from your ObjectSync instance.
@@ -625,7 +616,7 @@ import { ObjectSync, Message } from "simple-object-sync";
 
 const clientSync = new ObjectSync({
   identity: "client",
-  serializers: [SomeTrackableClass]
+  types: [SomeTrackableClass]
 });
 const clientTokenFromHost = clientSync.registerClient({ identity: "host" });
 
@@ -681,7 +672,7 @@ await exchangeMessagesWithClients();
 ```typescript
 // 1. We should receive the create messages for Alpha and Beta
 await receiveMessages();
-const alpha = hostSync.findOne(Alpha);
+const alpha = hostSync.rootObjects.findOne(Alpha);
 const originalBeta = alpha.betaToTransfer;
 
 // 2. We should receive the delete messages for the Beta instance and
@@ -751,7 +742,7 @@ await exchangeMessagesWithClients();
 ```typescript
 // 1. We should receive the create messages for Alpha and Beta
 await receiveMessages();
-const alpha = hostSync.findOne(Alpha);
+const alpha = hostSync.rootObjects.findOne(Alpha);
 const originalBeta = alpha.betaToTransfer;
 
 // 2. We should only receive a change message to let us know about the fact that alpha.betaToTransfer is now null
@@ -872,7 +863,8 @@ Handles message exchange with clients, including filtering and error handling:
 
 Finds one or more tracked object by type or ID:
 
-- `findOne<T>(constructorOrObjectId: Constructor<T> | string, objectId?: string): T | undefined`
+- `allObjects.findOne<T>(constructorOrObjectId: Constructor<T> | string, objectId?: string): T | undefined`
+- `rootObjects.findOne<T>(constructorOrObjectId: Constructor<T> | string, objectId?: string): T | undefined`
 
   ```typescript
   // Host:
@@ -881,12 +873,13 @@ Finds one or more tracked object by type or ID:
   hostSync.track(someInstance, "wellKnownName");
 
   // Client:
-  const someInstance: SomeClass | undefined = clientSync.findOne<SomeClass>("wellKnownName");
-  const otherInstance: OtherClass | undefined = clientSync.findOne(OtherClass);
+  const someInstance: SomeClass | undefined = clientSync.rootObjects.findOne<SomeClass>("wellKnownName");
+  const otherInstance: OtherClass | undefined = clientSync.rootObjects.findOne(OtherClass);
   console.log(someInstance.other === otherInstance); // true
   ```
 
-- `findAll<T>(constructor: Constructor<T>): T[]`
+- `allObjects.findAll<T>(constructor: Constructor<T>): T[]`
+- `rootObjects.findAll<T>(constructor: Constructor<T>): T[]`
 
   ```typescript
   // Host:
@@ -896,30 +889,33 @@ Finds one or more tracked object by type or ID:
   hostSync.track(someOtherInstance);
 
   // Client:
-  const someInstances: SomeClass[] = clientSync.findAll<SomeClass>(SomeClass);
+  const someInstances: SomeClass[] = clientSync.rootObjects.findAll<SomeClass>(SomeClass);
   console.log(someInstances.length); // 2
   ```
 
-Gets the dispatcher for a tracked object. You can specify a generic dispatcher type for custom or advanced usage:
+Gets the used sync agent for a tracked object.  
+When the object is not yet tracked it will be inexplicitely tracked as non root object.
+You can specify a sync agent type for custom or advanced usage:
 
-- `getDispatcher(instance: Array<T>): IArrayDispatcher<T> | null`
-- `getDispatcher(instance: Set<T>): ISetDispatcher<T> | null`
-- `getDispatcher(instance: Map<K, V>): IMapDispatcher<K,V> | null`
-- `getDispatcher(instance: object): ISyncObjectDispatcher | null`
-- `getDispatcher<TDispatcher>(instance: object): TDispatcher | null`  
+- `getSyncAgent(instance: Array<T>): IArraySyncAgent<T> | null`
+- `getSyncAgent(instance: Set<T>): ISetSyncAgent<T> | null`
+- `getSyncAgent(instance: Map<K, V>): IMapSyncAgent<K,V> | null`
+- `getSyncAgent(instance: object): ISyncObjectSyncAgent | null`
+- `getSyncAgent<TSyncAgent extends ISyncAgent>(instance: object): TSyncAgent | null`
 
-  The method is generic and allows you to provide a dispatcher type:  
+  The method is generic and allows you to provide a syncAgent type:
 
   ```typescript
-  const dispatcher = sync.getDispatcher<MyCustomDispatcherType>(myObject);
+  const syncAgent = sync.getSyncAgent<IMyCustomSyncAgent>(myObject);
   ```
 
-  This enables type-safe access to custom dispatchers, not just the default dispatchers. Use this when your tracked object has a specialized dispatcher interface.
+  This enables type-safe access to custom sync agents, not just the default sync agents. Use this when your tracked object has a specialized sync agent interface.
 
 **Properties:**
 
 - `identity`: The identity of this sync instance.
-- `allTrackedObjects`: All currently tracked objects.
+- `allObjects`: All currently tracked objects.
+- `rootObjects`: All currently tracked root objects (from the host or client).
 - `registeredClientTokens`: All registered client tokens.
 
 **Example:**
@@ -942,7 +938,7 @@ sync.applyMessagesAsync(replyMessages, clientToken);
 **Tips:**
 
 - Use `track` for root objects you want to keep synchronized and alive.
-- Use `getDispatcher` to invoke methods or report changes on tracked objects.
+- Use `getSyncAgent` to invoke methods or report changes on tracked objects.
 - Use `exchangeMessagesAsync` for full message exchange cycles with clients.
 
 The `ObjectSyncSettings` object is used to configure your `ObjectSync` instance.  
@@ -955,8 +951,8 @@ It determines how objects are tracked, serialized, and synchronized between host
 
 **Optional:**
 
-- `serializers`: An array of classes or serializer constructors for custom types you want to synchronize. If omitted, all available types are used.
-- `intrinsicSerializers`: An array of serializers for built-in types (Array, Map, Set, Object). Defaults are provided if omitted.
+- `types`: An array of classes or `SyncAgentProvider` instances for custom types you want to synchronize. If omitted, all available types are used.
+- `intrinsics`: An array of type or `SyncAgentProvide` instances for built-in types (Array, Map, Set, Object). Defaults are provided if omitted.
 - `objectIdGeneratorSettings`: Controls how object IDs are generated. Use a custom function or a prefix string (Defaults to use the `identity` as prefix string).
 - `arrayChangeSetMode`: `"trackSplices"` (for efficient small changes) or `"compareStates"` (for efficient large changes). Defaults to `"compareStates"`.
 - `memoryManagementMode`: `"weak"` (objects deleted when garbage collected) or `"byClient"` (objects deleted when no client uses them). Defaults to `"byClient"`.
@@ -969,7 +965,7 @@ import { MyCustomClass } from "./myCustomClass";
 
 const sync = new ObjectSync({
   identity: "host",
-  serializers: [MyCustomClass], // Restrict to custom type only
+  types: [MyCustomClass], // Restrict to custom type only
   arrayChangeSetMode: "trackSplices", // Use splice tracking for arrays
   memoryManagementMode: "weak", // Use weak memory management
   objectIdGeneratorSettings: { prefix: "host" }, // Custom ID prefix
@@ -978,9 +974,129 @@ const sync = new ObjectSync({
 
 **Tips:**
 
-- Use `serializers` to restrict which types can be synchronized.
+- Use `types` and `intrinsics` to restrict which types can be synchronized.
 - Set `memoryManagementMode` to `"weak"` for reference stability and less aggressive deletion.
 - Adjust `arrayChangeSetMode` for your array mutation patterns.
+
+## Security
+
+To prevent malicious or invalid data from being transferred, you must verify and validate all incoming and outgoing data.  
+Use the hooks provided by decorator functions (such as `canApply`, `canTrack`, `beforeSendToClient`, and `beforeExecuteOnClient`) to implement custom validation, filtering, and access control logic for your application.
+
+An `ObjectSync` instance will only create or instantiate types registered in its `types` and `intrinsics` list.  
+By default, all known types marked with `@syncObject` are allowed unless you restrict the configuration.  
+
+If you need to limit which types can be synchronized and instantiated, you must explicitly control the contents of `types` and `intrinsics`.  
+`intrinsics` contains everything to handle `Set`, `Array`, `Map`, `Object` and `Error` types.
+
+You can also specify which types are acceptable for each `syncProperty` and `syncMethod`, when the receiver receives a not supported type, an exception will be thrown at the receiver while applying the messages. You should consider the receiver as unusable in those cases.
+
+```typescript
+import { ObjectSync } from "simple-object-sync";
+
+@syncObject({})
+class MyClass {
+  @syncProperty({
+    allowedTypesFromSender: [Number, MyOtherClass, null],
+  })
+  accessor value: number | MyOtherClass | null = 0;
+
+  @syncProperty({
+    allowedTypesFromSender: [Number, MyOtherClass, null],
+  })
+  accessor value: number | MyOtherClass | null = 0;
+
+  @syncMethod({
+    allowedParameterTypesFromSender: [
+      [Number],
+      [SubTrackable, null]
+    ],
+    allowedRejectionTypesFromSender: [Error, String],
+    allowedReturnTypesFromSender: [Number],
+  })
+  myMethod(value: number, someData: MyOtherClass | null): Promise<number> {
+    throw new MyForbiddenErrorType(); // The invoker should throw an error as MyForbiddenErrorType is not allowed
+  }
+}
+
+...
+
+const instance = new MyClass();
+instance.value = new MyForbiddenClass() as any; // The client will throw an error when receiving this
+
+sync.track(instance);
+
+const syncAgent = sync.getSyncAgent(instance);
+const argument0 = "i am a string and forbidden";
+const argument1 = new MyForbiddenClass();
+syncAgent.invoke("myMethod",
+  argument0, // The client expects a number, but we send a string
+  argument1 // The client expects null or an instance of MyOtherClass
+);
+```
+
+You can restrict which tracked objects the client may receive, you can restrict this in the ObjectSyncSettings or at a later time by changing the `ObjectSync.rootObjects.allowedRootTypesFromClient` value:
+
+```typescript
+import { ObjectSync } from "simple-object-sync";
+
+const sync = new ObjectSync({
+  ...
+  allowedRootTypesFromClient: [MyClass]
+});
+
+...
+
+// no longer allow to receive any root types, doing so will throw an exception
+// existing root objects are unaffected
+sync.rootObjects.allowedRootTypesFromClient = [];
+```
+
+Most intrinsic types allow to limit the types allowed from senders to be limited by using the `SyncAgent` from them.
+
+```typescript
+const arraySyncAgent = sync.getSyncAgent(myArray);
+arraySyncAgent.allowedTypesFromSender = [...];
+```
+
+```typescript
+const setSyncAgent = sync.getSyncAgent(mySet);
+setSyncAgent.allowedTypesFromSender = [...];
+```
+
+```typescript
+const mapSyncAgent = sync.getSyncAgent(myMap);
+mapSyncAgent.allowedKeyTypesFromSender = [...];
+mapSyncAgent.allowedValueTypesFromSender = [...];
+```
+
+You can use it in combination with the `@syncProperty` decorator and the `afterValueChanged` property which will be called every time the value chnages:
+
+```typescript
+@syncObject({})
+class MyClass {
+  @syncProperty({
+    allowedTypesFromSender: [Array],
+    afterValueChanged({ value, syncAgent }) {
+      const arraySyncAgent = syncAgent as IArraySyncAgent;
+      if (!arraySyncAgent.allowedTypesFromSender) {
+        arraySyncAgent.allowedTypesFromSender = [MyClass];
+      }
+    },
+  })
+  accessor value: Array<MyClass> = [];
+}
+```
+
+Or with events send from the ObjectSync instance:
+
+```typescript
+sync.on("tracked", (instance: object, syncAgent: ISyncAgent) => {
+  if (instance instanceof Array) {
+    (syncAgent as IArraySyncAgent).allowedTypesFromSender = [MyClass];
+  }
+});
+```
 
 ## Testing
 

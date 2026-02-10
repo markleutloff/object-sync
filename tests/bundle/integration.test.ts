@@ -1,4 +1,4 @@
-import { ObjectSync, SyncableArray, ClientToken, syncObject, ObjectSyncSettings, ExtendedTypeSerializer, CreateObjectMessage, Message, syncSerializer } from "../../dist/index.js";
+import { ObjectSync, SyncableArray, ClientToken, syncObject, ObjectSyncSettings, ExtendedSyncAgent, CreateObjectMessage, Message, syncAgent } from "../../dist/index.js";
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "assert";
@@ -14,11 +14,11 @@ class CustomClass {
   }
 }
 
-@syncSerializer({
+@syncAgent({
   typeId: "CustomClass",
   type: CustomClass,
 })
-class CustomClassSerializer extends ExtendedTypeSerializer<CustomClass, string, string> {
+class CustomClassSyncAgent extends ExtendedSyncAgent<CustomClass, string, string> {
   onCreateMessageReceived(message: CreateObjectMessage<string>, clientToken: ClientToken): void {
     this.instance = new CustomClass(message.data);
   }
@@ -63,7 +63,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const creationMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(creationMessages, hostObjectSyncClientToken);
 
-    const alphaClient = clientObjectSync.findOne(SyncableArray<string>)!;
+    const alphaClient = clientObjectSync.rootObjects.findOne(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha, alphaClient);
   });
 
@@ -75,7 +75,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(changeMessages, hostObjectSyncClientToken);
 
-    const alphaClient = clientObjectSync.findOne(SyncableArray<string>)!;
+    const alphaClient = clientObjectSync.rootObjects.findOne(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha, alphaClient);
   });
 
@@ -88,7 +88,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(changeMessages, hostObjectSyncClientToken);
 
-    const alphaClient = clientObjectSync.findOne(SyncableArray<string>)!;
+    const alphaClient = clientObjectSync.rootObjects.findOne(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha, alphaClient);
   });
 
@@ -105,7 +105,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(changeMessages, hostObjectSyncClientToken);
 
-    const alphaClient = clientObjectSync.findOne(SyncableArray<string>)!;
+    const alphaClient = clientObjectSync.rootObjects.findOne(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha, alphaClient);
   });
 
@@ -120,14 +120,14 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(changeMessages, hostObjectSyncClientToken);
 
-    const alphaClient = clientObjectSync.findOne(SyncableArray<string>)!;
+    const alphaClient = clientObjectSync.rootObjects.findOne(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha, alphaClient);
   });
 
   it("should transfer only a single push change", async () => {
     const creationMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(creationMessages, hostObjectSyncClientToken);
-    const alphaClient = clientObjectSync.findOne(SyncableArray<string>)!;
+    const alphaClient = clientObjectSync.rootObjects.findOne(SyncableArray<string>)!;
 
     alpha.push("value3", "toBeRemoved", "value5");
     // remove toBeRemoved
@@ -149,7 +149,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const changeMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(changeMessages, hostObjectSyncClientToken);
 
-    const alphaClient = clientObjectSync.findOne(SyncableArray<string>)!;
+    const alphaClient = clientObjectSync.rootObjects.findOne(SyncableArray<string>)!;
     assert.deepStrictEqual(alpha, alphaClient);
   });
 
@@ -160,18 +160,18 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const creationMessages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(creationMessages, hostObjectSyncClientToken);
 
-    const betaClient = clientObjectSync.findOne(Beta)!;
+    const betaClient = clientObjectSync.allObjects.findOne(Beta)!;
     assert.notEqual(betaClient, null);
   });
 
   it("should serialize a custom class", async () => {
     hostObjectSync = new ObjectSync({
       identity: "host",
-      serializers: [CustomClass],
+      types: [CustomClass],
     });
     clientObjectSync = new ObjectSync({
       identity: "client",
-      serializers: [CustomClass],
+      types: [CustomClass],
     });
 
     clientObjectSyncClientToken = hostObjectSync.registerClient({ identity: "client" });
@@ -183,7 +183,7 @@ describe("ObjectSync client-host integration (SyncableArray)", () => {
     const messages = hostObjectSync.getMessages().get(clientObjectSyncClientToken)!;
     await clientObjectSync.applyMessagesAsync(messages, hostObjectSyncClientToken);
 
-    const customClient = clientObjectSync.findOne(CustomClass)!;
+    const customClient = clientObjectSync.rootObjects.findOne(CustomClass)!;
     assert.notEqual(customClient, null);
   });
 });

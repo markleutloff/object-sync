@@ -32,6 +32,7 @@ export type CreateObjectMessage<TPayload = any> = Message & {
   type: typeof CreateMessageType;
   typeId: string;
   data: TPayload;
+  isRoot?: boolean;
 };
 
 export type ChangeObjectMessage<TPayload = any> = Message & {

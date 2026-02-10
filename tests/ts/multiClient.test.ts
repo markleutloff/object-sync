@@ -68,7 +68,7 @@ describe("ObjectSync multiple clients", () => {
     await exchangeMessagesAsync();
 
     for (const clientObjectSync of clientObjectSyncs.values()) {
-      const clientRoot = clientObjectSync.findOne(Root)!;
+      const clientRoot = clientObjectSync.rootObjects.findOne(Root)!;
       assert.notStrictEqual(clientRoot, hostRoot);
       assert.strictEqual(clientRoot.value, hostRoot.value);
     }
