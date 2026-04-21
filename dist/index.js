@@ -2755,6 +2755,8 @@ var ObjectSyncCore = class extends EventEmitter {
       clearNonClientStates = clientOrClientsOrCallTick ?? true;
     } else if (!isIterable(clientOrClientsOrCallTick)) {
       clientTokens = clientOrClientsOrCallTick;
+    } else {
+      clientTokens = clientOrClientsOrCallTick;
     }
     result = this.getMessagesForClients(clientTokens ?? this._clients, clearNonClientStates);
     if (clientTokens === void 0 || isIterable(clientTokens))

@@ -139,7 +139,6 @@ describe("ObjectSync client-host integration (objectSync)", () => {
     const messagesFromClient = clientObjectSync.getMessages(hostObjectSyncClientToken);
     await hostObjectSync.applyMessagesAsync(messagesFromClient, clientObjectSyncClientToken);
   };
-
   it("should report creation to client", async () => {
     hostRoot.value = 42;
     await exchangeMessagesAsync();

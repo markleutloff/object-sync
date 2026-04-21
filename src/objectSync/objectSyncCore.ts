@@ -466,6 +466,8 @@ export class ObjectSyncCore extends EventEmitter<ObjectSyncEventMap> {
       clearNonClientStates = clientOrClientsOrCallTick ?? true;
     } else if (!isIterable(clientOrClientsOrCallTick)) {
       clientTokens = clientOrClientsOrCallTick;
+    } else {
+      clientTokens = clientOrClientsOrCallTick;
     }
 
     result = this.getMessagesForClients(clientTokens ?? this._clients, clearNonClientStates);

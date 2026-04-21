@@ -86,9 +86,30 @@ export type TrackedPropertySettings<T extends object, TValue> = TrackedPropertyS
    * Function which is called after the property value has been applied from a client.
    */
   afterValueChanged?<TKey extends keyof T & string>(this: T, payload: AfterValueChangedPayload<T, TKey, TValue>): void;
-};
+} & (T extends Array<any> ? {
+  /**
+   * List of allowed types which can be assigned as elements to the array from the sender.
+   */
+  allowedArrayElementTypesFromSender?: Array<Constructor | null | undefined>;
+} : {}) & (T extends Set<any> ? {
+  /**
+   * List of allowed types which can be assigned as elements to the set from the sender.
+   */
+  allowedSetElementTypesFromSender?: Array<Constructor | null | undefined>;
+} : {}) & (T extends Map<any, any> ? {
+  /**
+   * List of allowed types which can be assigned as keys to the map from the sender.
+   */
+  allowedMapKeyTypesFromSender?: Array<Constructor | null | undefined>;
+  /**
+   * List of allowed types which can be assigned as values to the map from the sender.
+   */
+  allowedMapValueTypesFromSender?: Array<Constructor | null | undefined>;
+} : {});
 
-export type TrackedPropertyInfo<T extends object, TValue> = TrackedPropertySettings<T, TValue> & {};
+export type TrackedPropertyInfo<T extends object, TValue> = TrackedPropertySettings<T, TValue> & {
+
+};
 
 /**
  * Property accessor decorator for marking a property as trackable.
@@ -119,6 +140,7 @@ export function syncProperty<This extends object, Return>(settings?: TrackedProp
     return result;
   };
 }
+
 
 export function checkCanApplyProperty(constructor: Constructor, instance: object, propertyKey: string, isMethod: boolean, sourceClientToken: ClientToken) {
   const constructorInfo = getTrackableTypeInfo(constructor);

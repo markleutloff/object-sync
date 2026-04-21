@@ -30,13 +30,8 @@ describe("ObjectSync multiple clients", () => {
   }
 
   beforeEach(() => {
-    const defaultSettings = {
-      typeSerializers: [],
-    };
     const hostSettings = {
       identity: "host",
-      typeGenerators: [],
-      ...defaultSettings,
     };
 
     hostObjectSync = new ObjectSync(hostSettings);
@@ -47,8 +42,7 @@ describe("ObjectSync multiple clients", () => {
     function createClient() {
       const clientSettings = {
         identity: `client${nextClientId++}`,
-        typeGenerators: [Root],
-        ...defaultSettings,
+        types: [Root],
       };
       const clientObjectSync = new ObjectSync(clientSettings);
       const result = clientObjectSync as ObjectSyncAndClientToken;
