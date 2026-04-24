@@ -32,6 +32,8 @@ export function createSimpleSyncAgentProvider<TInstance extends object, TPayload
     syncType: type,
     typeId,
     matchExactType: true,
+    serialize: serialize as (instance: any) => any,
+    deserialize: deserialize as (data: any) => object,
   });
 
   return agentProvider;

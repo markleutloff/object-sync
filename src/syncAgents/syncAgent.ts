@@ -53,7 +53,6 @@ export abstract class SyncAgent<TInstance extends object = object, TCreatePayloa
   private _clientFilters: ClientTokenFilter | null = null;
 
   constructor(protected readonly _objectInfo: ObjectInfo<TInstance>) {}
- 
 
   protected get hasPendingChanges() {
     return this._hasPendingChanges;
@@ -120,8 +119,6 @@ export abstract class SyncAgent<TInstance extends object = object, TCreatePayloa
       this._hasPendingChanges = false;
     }
   }
-
-
 
   /**
    * Reports to the owner that there are pending messages for the object.
@@ -209,6 +206,9 @@ export abstract class SyncAgent<TInstance extends object = object, TCreatePayloa
 
     for (const value of values) {
       if (isPrimitiveValue(value)) continue;
+
+      const provider = this._objectInfo.owner.syncAgentProviders.find(value);
+      if (provider?.serialize) continue;
 
       const storedReference = this._objectInfo.owner.trackInternal(value)!.addReference(settings.clientToken);
       disposables.push(storedReference);

@@ -23,7 +23,11 @@ type ObjectReference = {
 	objectId: string;
 	typeId: string;
 };
-export type SerializedValue = PrimitiveValue | ObjectReference | undefined;
+export type InlineValue = {
+	typeId: string;
+	value: any;
+};
+export type SerializedValue = PrimitiveValue | ObjectReference | InlineValue | undefined;
 export declare const CreateMessageType = "create";
 export declare const ChangeMessageType = "change";
 export declare const DeleteMessageType = "delete";
@@ -322,7 +326,7 @@ declare class ObjectSyncCore extends EventEmitter<ObjectSyncEventMap> {
 	private handleDeleteMessage;
 	serializeValue(value: any, clientToken: ClientToken): SerializedValue;
 	private checkIsTypeAllowed;
-	deserializeValue(value: SerializedValue, clientToken: ClientToken, allowedTypes?: (Constructor | undefined | null)[]): string | number | boolean | object | null | undefined;
+	deserializeValue(value: SerializedValue, clientToken: ClientToken, allowedTypes?: (Constructor | undefined | null)[]): any;
 	applyMessagesAsync(messagesOrMessagesByClient: Message[] | Map<ClientToken, Message[]>, clientToken?: ClientToken): Promise<void>;
 	applyMessages(messagesOrMessagesByClient: Message[] | Map<ClientToken, Message[]>, clientToken?: ClientToken): Promise<any>[];
 	private sortMessages;
@@ -502,7 +506,7 @@ export declare abstract class SyncAgent<TInstance extends object = object, TCrea
 	/**
 	 * Deserializes a value (basically converts any ObjectReferences to actual object references).
 	 */
-	protected deserializeValue(value: SerializedValue, clientToken: ClientToken, allowedTypes?: (Constructor | undefined | null)[]): string | number | boolean | object | null | undefined;
+	protected deserializeValue(value: SerializedValue, clientToken: ClientToken, allowedTypes?: (Constructor | undefined | null)[]): any;
 	/**
 	 * Generates messages to be sent to the client.
 	 * @param clientToken The client token for which to generate messages.
@@ -602,12 +606,27 @@ type SyncAgentProviderSettings = {
 	 * The priority of the SyncAgentProvider. When multiple SyncAgentProviders can provide a SyncAgent for a given type or typeId, the one with the highest priority will be used. The default priority is 0.
 	 */
 	priority?: number;
+	/**
+	 * Optional serialize function for inline value serialization. When provided, the type will be serialized as an inline value
+	 * instead of being tracked as a referenced object. This is ideal for immutable value types that never change after creation.
+	 */
+	serialize?: (instance: any) => any;
+	/**
+	 * Optional deserialize function for inline value deserialization. Must be provided together with serialize.
+	 */
+	deserialize?: (data: any) => object;
 };
-declare class SyncAgentProvider {
+/**
+ * The SyncAgentProvider is responsible for providing SyncAgents for a given type or typeId. When a new SyncAgent is needed for an object, the SyncAgentProvider will be asked if it can provide a SyncAgent for the object's type (or one of its base types) or typeId. The first SyncAgentProvider that returns true will be used to create the SyncAgent for the object.
+ */
+export declare class SyncAgentProvider {
 	private readonly _settings;
 	constructor(_settings: SyncAgentProviderSettings);
 	get priority(): number;
 	get syncType(): Constructor;
+	get typeId(): string;
+	get serialize(): ((instance: any) => any) | undefined;
+	get deserialize(): ((data: any) => object) | undefined;
 	canProvideAgentFor(typeOrTypeId: object | string): boolean;
 	createAgent(objectInfo: ObjectInfo): SyncAgent;
 }
@@ -985,6 +1004,7 @@ type SpliceInstructionEx<T = any> = {
 	items: T[];
 };
 export declare class SyncableArray<T = any> extends Array<T> {
+	static get [Symbol.species](): ArrayConstructor;
 	constructor(...initialData: T[]);
 	setLength(value: number): void;
 	setAtIndex(index: number, value: T): boolean;

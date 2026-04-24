@@ -37,6 +37,17 @@ export type SyncAgentProviderSettings = {
    * The priority of the SyncAgentProvider. When multiple SyncAgentProviders can provide a SyncAgent for a given type or typeId, the one with the highest priority will be used. The default priority is 0.
    */
   priority?: number;
+
+  /**
+   * Optional serialize function for inline value serialization. When provided, the type will be serialized as an inline value
+   * instead of being tracked as a referenced object. This is ideal for immutable value types that never change after creation.
+   */
+  serialize?: (instance: any) => any;
+
+  /**
+   * Optional deserialize function for inline value deserialization. Must be provided together with serialize.
+   */
+  deserialize?: (data: any) => object;
 };
 
 /**
@@ -54,6 +65,18 @@ export class SyncAgentProvider {
 
   public get syncType(): Constructor {
     return this._settings.syncType;
+  }
+
+  public get typeId(): string {
+    return this._settings.typeId;
+  }
+
+  public get serialize(): ((instance: any) => any) | undefined {
+    return this._settings.serialize;
+  }
+
+  public get deserialize(): ((data: any) => object) | undefined {
+    return this._settings.deserialize;
   }
 
   public canProvideAgentFor(typeOrTypeId: object | string): boolean {

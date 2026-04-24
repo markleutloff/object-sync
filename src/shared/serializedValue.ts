@@ -7,4 +7,9 @@ export type ObjectReference = {
   typeId: string;
 };
 
-export type SerializedValue = PrimitiveValue | ObjectReference | undefined;
+export type InlineValue = {
+  typeId: string;
+  value: any;
+};
+
+export type SerializedValue = PrimitiveValue | ObjectReference | InlineValue | undefined;

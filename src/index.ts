@@ -8,6 +8,7 @@ export {
   type Message,
   type IEventEmitter,
   type SerializedValue,
+  type InlineValue,
   EventEmitter,
   ClientToken,
   isChangeObjectMessage,
@@ -52,6 +53,7 @@ export {
   syncMethod,
   syncObject,
   syncProperty,
+  SyncAgentProvider,
   type ObjectInfo,
 } from "./syncAgents/index.js";
 

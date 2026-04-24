@@ -18,6 +18,7 @@ import {
   isIterable,
   isPrimitiveValue,
   SerializedValue,
+  ObjectReference,
   OneOrMany,
   EventEmitter,
 } from "../shared/index.js";
@@ -291,6 +292,11 @@ export class ObjectSyncCore extends EventEmitter<ObjectSyncEventMap> {
       };
     }
 
+    const provider = this._syncAgentProviders.find(value);
+    if (provider?.serialize) {
+      return { typeId: provider.typeId, value: provider.serialize(value) };
+    }
+
     const objectInfo = this.trackInternal(value as any)!;
     const typeId = objectInfo.syncAgent.getTypeId(clientToken);
     if (typeId === undefined || typeId === null) {
@@ -308,6 +314,11 @@ export class ObjectSyncCore extends EventEmitter<ObjectSyncEventMap> {
     }
     if (value === undefined) {
       return;
+    } else if ("typeId" in value && "value" in value && !("objectId" in value)) {
+      const provider = this.syncAgentProviders.find(value.typeId);
+      if (provider && !allowedTypes.includes(provider.syncType)) {
+        throw new Error(`Not allowed type ${provider.syncType.name}.`);
+      }
     } else if (!("objectId" in value)) {
       let typeToTest: any = undefined;
       if (value.value === null) {
@@ -326,16 +337,17 @@ export class ObjectSyncCore extends EventEmitter<ObjectSyncEventMap> {
         throw new Error(`Value ${value.value} is not allowed. Allowed types: ${allowedTypes.map((t) => (t === undefined ? "undefined" : t === null ? "null" : t.name)).join(", ")}`);
       }
     } else {
+      const objRef = value as ObjectReference;
       let provider: SyncAgentProvider | null = null;
-      const obj = this._objectPool.getObjectById(value.objectId); // Just check if object exists, type will be checked when processing the create message
+      const obj = this._objectPool.getObjectById(objRef.objectId); // Just check if object exists, type will be checked when processing the create message
       if (!obj) {
-        const pendingCreateMessage = this._pendingCreateMessageByObjectId.get(value.objectId);
+        const pendingCreateMessage = this._pendingCreateMessageByObjectId.get(objRef.objectId);
         if (pendingCreateMessage) {
           const typeId = pendingCreateMessage.typeId;
           provider = this.syncAgentProviders.find(typeId);
           if (!provider || !allowedTypes.includes(provider.syncType)) throw new Error(`Not allowed typeId ${typeId}.`);
         } else {
-          throw new Error(`Object with id ${value.objectId} not found`);
+          throw new Error(`Object with id ${objRef.objectId} not found`);
         }
       } else {
         const type = obj.constructor;
@@ -349,6 +361,13 @@ export class ObjectSyncCore extends EventEmitter<ObjectSyncEventMap> {
     this.checkIsTypeAllowed(value, allowedTypes);
 
     if (value === undefined) return undefined;
+
+    if ("typeId" in value && "value" in value && !("objectId" in value)) {
+      const provider = this._syncAgentProviders.find(value.typeId);
+      if (provider?.deserialize) {
+        return provider.deserialize(value.value);
+      }
+    }
 
     if (!("objectId" in value)) {
       return value.value;

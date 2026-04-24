@@ -262,6 +262,9 @@ var SyncAgent = class {
     for (const value of values) {
       if (isPrimitiveValue(value))
         continue;
+      const provider = this._objectInfo.owner.syncAgentProviders.find(value);
+      if (provider?.serialize)
+        continue;
       const storedReference = this._objectInfo.owner.trackInternal(value).addReference(settings.clientToken);
       disposables.push(storedReference);
     }
@@ -363,6 +366,15 @@ var SyncAgentProvider = class {
   get syncType() {
     return this._settings.syncType;
   }
+  get typeId() {
+    return this._settings.typeId;
+  }
+  get serialize() {
+    return this._settings.serialize;
+  }
+  get deserialize() {
+    return this._settings.deserialize;
+  }
   canProvideAgentFor(typeOrTypeId) {
     if (typeof typeOrTypeId === "string") {
       return typeOrTypeId === this._settings.typeId;
@@ -430,7 +442,9 @@ function createSimpleSyncAgentProvider(settings) {
     syncAgentType: SyncAgent2,
     syncType: type,
     typeId,
-    matchExactType: true
+    matchExactType: true,
+    serialize,
+    deserialize
   });
   return agentProvider;
 }
@@ -1052,6 +1066,9 @@ var SyncArrayMetaInfo = class extends MetaInfo {
 var realInstanceSymbol = Symbol("realInstanceSymbol");
 var ignoreSyncSpliceCounterByInstance = /* @__PURE__ */ new Map();
 var SyncableArray = class extends Array {
+  static get [Symbol.species]() {
+    return Array;
+  }
   constructor(...initialData) {
     super(...initialData);
     const that = this;
@@ -2602,6 +2619,10 @@ var ObjectSyncCore = class extends EventEmitter {
         value
       };
     }
+    const provider = this._syncAgentProviders.find(value);
+    if (provider?.serialize) {
+      return { typeId: provider.typeId, value: provider.serialize(value) };
+    }
     const objectInfo = this.trackInternal(value);
     const typeId = objectInfo.syncAgent.getTypeId(clientToken);
     if (typeId === void 0 || typeId === null) {
@@ -2617,6 +2638,11 @@ var ObjectSyncCore = class extends EventEmitter {
     }
     if (value === void 0) {
       return;
+    } else if ("typeId" in value && "value" in value && !("objectId" in value)) {
+      const provider = this.syncAgentProviders.find(value.typeId);
+      if (provider && !allowedTypes.includes(provider.syncType)) {
+        throw new Error(`Not allowed type ${provider.syncType.name}.`);
+      }
     } else if (!("objectId" in value)) {
       let typeToTest = void 0;
       if (value.value === null) {
@@ -2634,17 +2660,18 @@ var ObjectSyncCore = class extends EventEmitter {
         throw new Error(`Value ${value.value} is not allowed. Allowed types: ${allowedTypes.map((t) => t === void 0 ? "undefined" : t === null ? "null" : t.name).join(", ")}`);
       }
     } else {
+      const objRef = value;
       let provider = null;
-      const obj = this._objectPool.getObjectById(value.objectId);
+      const obj = this._objectPool.getObjectById(objRef.objectId);
       if (!obj) {
-        const pendingCreateMessage = this._pendingCreateMessageByObjectId.get(value.objectId);
+        const pendingCreateMessage = this._pendingCreateMessageByObjectId.get(objRef.objectId);
         if (pendingCreateMessage) {
           const typeId = pendingCreateMessage.typeId;
           provider = this.syncAgentProviders.find(typeId);
           if (!provider || !allowedTypes.includes(provider.syncType))
             throw new Error(`Not allowed typeId ${typeId}.`);
         } else {
-          throw new Error(`Object with id ${value.objectId} not found`);
+          throw new Error(`Object with id ${objRef.objectId} not found`);
         }
       } else {
         const type = obj.constructor;
@@ -2658,6 +2685,12 @@ var ObjectSyncCore = class extends EventEmitter {
     this.checkIsTypeAllowed(value, allowedTypes);
     if (value === void 0)
       return void 0;
+    if ("typeId" in value && "value" in value && !("objectId" in value)) {
+      const provider = this._syncAgentProviders.find(value.typeId);
+      if (provider?.deserialize) {
+        return provider.deserialize(value.value);
+      }
+    }
     if (!("objectId" in value)) {
       return value.value;
     }
@@ -2991,6 +3024,7 @@ export {
   ObjectSync,
   SetSyncAgentProvider,
   SyncAgent,
+  SyncAgentProvider,
   SyncableArray,
   SyncableArraySyncAgentProvider,
   SyncableMap,

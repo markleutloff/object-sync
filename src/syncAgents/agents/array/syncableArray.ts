@@ -6,6 +6,10 @@ const realInstanceSymbol = Symbol("realInstanceSymbol");
 const ignoreSyncSpliceCounterByInstance = new Map<SyncableArray, number>();
 
 export class SyncableArray<T = any> extends Array<T> {
+  static get [Symbol.species]() {
+    return Array;
+  }
+
   constructor(...initialData: T[]) {
     super(...initialData);
 
