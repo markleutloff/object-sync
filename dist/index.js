@@ -402,6 +402,12 @@ var ExtendedSyncAgent = class extends SyncAgent {
   get isApplyingMessages() {
     return this._isApplyingMessages > 0;
   }
+  pauseApplyingMessages() {
+    this._isApplyingMessages--;
+  }
+  resumeApplyingMessages() {
+    this._isApplyingMessages++;
+  }
   registerMessageHandler(messageType, handler) {
     this._messageTypeToHandler.set(messageType, handler);
   }
@@ -777,7 +783,12 @@ var SyncObjectSyncAgent = class extends ExtendedSyncAgent {
       const parameters = message.parameters.map((value, index) => {
         return this.deserializeValue(value, clientToken, methodInfo.allowedParameterTypesFromSender ? methodInfo.allowedParameterTypesFromSender[index] ?? [] : void 0);
       });
-      resultOrPromise = method.apply(this.instance, parameters);
+      this.pauseApplyingMessages();
+      try {
+        resultOrPromise = method.apply(this.instance, parameters);
+      } finally {
+        this.resumeApplyingMessages();
+      }
     } catch (e) {
       finishInvoke(null, e);
       return;

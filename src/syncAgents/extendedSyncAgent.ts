@@ -16,6 +16,14 @@ export abstract class ExtendedSyncAgent<TInstance extends object = object, TCrea
     return this._isApplyingMessages > 0;
   }
 
+  protected pauseApplyingMessages() {
+    this._isApplyingMessages--;
+  }
+
+  protected resumeApplyingMessages() {
+    this._isApplyingMessages++;
+  }
+
   protected registerMessageHandler<TMessage extends Message>(messageType: string, handler: (message: TMessage, clientToken: ClientToken) => void) {
     this._messageTypeToHandler.set(messageType, handler as any);
   }

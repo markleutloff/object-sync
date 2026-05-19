@@ -208,7 +208,12 @@ export abstract class SyncObjectSyncAgent<TInstance extends object> extends Exte
       const parameters = message.parameters.map((value, index) => {
         return this.deserializeValue(value, clientToken, methodInfo.allowedParameterTypesFromSender ? (methodInfo.allowedParameterTypesFromSender[index] ?? []) : undefined);
       });
-      resultOrPromise = method.apply(this.instance, parameters);
+      this.pauseApplyingMessages();
+      try {
+        resultOrPromise = method.apply(this.instance, parameters);
+      } finally {
+        this.resumeApplyingMessages();
+      }
     } catch (e) {
       finishInvoke(null, e);
       return;

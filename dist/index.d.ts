@@ -635,6 +635,8 @@ export declare abstract class ExtendedSyncAgent<TInstance extends object = objec
 	private _isApplyingMessages;
 	constructor(objectInfo: ObjectInfo<TInstance>);
 	protected get isApplyingMessages(): boolean;
+	protected pauseApplyingMessages(): void;
+	protected resumeApplyingMessages(): void;
 	protected registerMessageHandler<TMessage extends Message>(messageType: string, handler: (message: TMessage, clientToken: ClientToken) => void): void;
 	applyMessage(message: Message, clientToken: ClientToken): void;
 	abstract onCreateMessageReceived(message: CreateObjectMessage<TCreatePayload>, clientToken: ClientToken): void;
